@@ -1,0 +1,4 @@
+[submodule "wine/src"]
+	path = wine/src
+	url = https://gitlab.winehq.org/wine/wine.git
+	shallow = true

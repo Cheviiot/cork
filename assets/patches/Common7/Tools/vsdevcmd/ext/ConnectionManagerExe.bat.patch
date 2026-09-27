@@ -1,0 +1,19 @@
+vintner: don't hard-fail devcmd setup when ConnectionManagerExe is missing.
+
+Not every MSVC/WinSDK download selection includes the Linux
+ConnectionManagerExe component; a missing optional component shouldn't
+abort the whole Developer Command Prompt setup.
+
+diff --git a/Common7/Tools/vsdevcmd/ext/ConnectionManagerExe.bat b/Common7/Tools/vsdevcmd/ext/ConnectionManagerExe.bat
+index 871b9af..f069a25 100644
+--- a/Common7/Tools/vsdevcmd/ext/ConnectionManagerExe.bat
++++ b/Common7/Tools/vsdevcmd/ext/ConnectionManagerExe.bat
+@@ -10,7 +10,7 @@ set "PATH=%PATH%;%VSINSTALLDIR%Common7\IDE\VC\Linux\bin\ConnectionManagerExe"
+ goto :end
+ 
+ :error_setting_path
+-exit /B 1
++exit /B 0
+ 
+ goto :end
+ 

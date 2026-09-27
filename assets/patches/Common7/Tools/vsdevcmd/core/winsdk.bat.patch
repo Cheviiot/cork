@@ -1,0 +1,66 @@
+vintner: find the Windows SDK/UCRT dirs on disk before trying the registry.
+
+winsdk.bat locates the Windows 10/11 SDK and Universal CRT SDK by querying
+the Windows Registry, which doesn't have real SDK installation entries
+under Wine. msvc-wine's own install layout always puts the SDK directly
+under "%VSINSTALLDIR%Windows Kits\10", so check that location first and
+only fall back to the registry-based lookups when it's not there.
+
+diff --git a/Common7/Tools/vsdevcmd/core/winsdk.bat b/Common7/Tools/vsdevcmd/core/winsdk.bat
+index af09494..c303775 100644
+--- a/Common7/Tools/vsdevcmd/core/winsdk.bat
++++ b/Common7/Tools/vsdevcmd/core/winsdk.bat
+@@ -64,6 +64,11 @@ exit /B 0
+ 
+ if "%VSCMD_DEBUG%" GEQ "3" goto :GetWin10SdkDirVerbose
+ 
++if exist "%VSINSTALLDIR%Windows Kits\10\include\" (
++    SET "WindowsSdkDir=%VSINSTALLDIR%Windows Kits\10\"
++    exit /B 0
++)
++
+ call :GetWin10SdkDirHelper HKLM\SOFTWARE\Wow6432Node > nul 2>&1
+ if errorlevel 1 call :GetWin10SdkDirHelper HKCU\SOFTWARE\Wow6432Node > nul 2>&1
+ if errorlevel 1 call :GetWin10SdkDirHelper HKLM\SOFTWARE > nul 2>&1
+@@ -73,6 +78,11 @@ exit /B 0
+ 
+ :GetWin10SdkDirVerbose
+ 
++if exist "%VSINSTALLDIR%Windows Kits\10\include\" (
++    SET "WindowsSdkDir=%VSINSTALLDIR%Windows Kits\10\"
++    exit /B 0
++)
++
+ call :GetWin10SdkDirHelper HKLM\SOFTWARE\Wow6432Node
+ if errorlevel 1 call :GetWin10SdkDirHelper HKCU\SOFTWARE\Wow6432Node
+ if errorlevel 1 call :GetWin10SdkDirHelper HKLM\SOFTWARE
+@@ -231,6 +241,14 @@ set UniversalCRTSdkDir=
+ 
+ if "%VSCMD_DEBUG%" GEQ "3" goto :GetUniversalCRTSdkDirVerbose
+ 
++if exist "%WindowsSdkDir%Lib\%WindowsSDKVersion%ucrt\" (
++    SET "UniversalCRTSdkDir=%WindowsSdkDir%"
++    exit /B 0
++) else if exist "%VSINSTALLDIR%Windows Kits\10\Lib\" (
++    SET "UniversalCRTSdkDir=%VSINSTALLDIR%Windows Kits\10\"
++    exit /B 0
++)
++
+ call :GetUniversalCRTSdkDirHelper HKLM\SOFTWARE\Wow6432Node > nul 2>&1
+ if errorlevel 1 call :GetUniversalCRTSdkDirHelper HKCU\SOFTWARE\Wow6432Node > nul 2>&1
+ if errorlevel 1 call :GetUniversalCRTSdkDirHelper HKLM\SOFTWARE > nul 2>&1
+@@ -240,6 +258,14 @@ exit /B 0
+ 
+ :GetUniversalCRTSdkDirVerbose
+ 
++if exist "%WindowsSdkDir%Lib\%WindowsSDKVersion%ucrt\" (
++    SET "UniversalCRTSdkDir=%WindowsSdkDir%"
++    exit /B 0
++) else if exist "%VSINSTALLDIR%Windows Kits\10\Lib\" (
++    SET "UniversalCRTSdkDir=%VSINSTALLDIR%Windows Kits\10\"
++    exit /B 0
++)
++
+ call :GetUniversalCRTSdkDirHelper HKLM\SOFTWARE\Wow6432Node
+ if errorlevel 1 call :GetUniversalCRTSdkDirHelper HKCU\SOFTWARE\Wow6432Node
+ if errorlevel 1 call :GetUniversalCRTSdkDirHelper HKLM\SOFTWARE

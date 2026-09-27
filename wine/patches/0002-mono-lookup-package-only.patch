@@ -1,0 +1,25 @@
+diff --git a/dlls/mscoree/metahost.c b/dlls/mscoree/metahost.c
+index 262a985..2fd9a9b 100644
+--- a/dlls/mscoree/metahost.c
++++ b/dlls/mscoree/metahost.c
+@@ -863,13 +863,16 @@ static BOOL get_mono_path_datadir(LPWSTR path)
+ 
+ BOOL get_mono_path(LPWSTR path, BOOL skip_local)
+ {
++    /* cork: the two system-wide fallbacks below this point are removed.
++     * /usr/share/wine/mono and /opt/wine/mono belong to whatever Wine the
++     * distribution installed; picking Mono up from there pairs our runtime with
++     * a version it was not built against, and the failure shows up as MSBuild
++     * misbehaving rather than as a missing component. Everything still tried is
++     * inside our own package: the prefix, its registry, and this build's datadir. */
+     return (!skip_local && get_mono_path_local(path)) ||
+         get_mono_path_registry(path) ||
+         get_mono_path_datadir(path) ||
+-        get_mono_path_unix(L"\\\\?\\unix" INSTALL_DATADIR "/wine/mono", path) ||
+-        (strcmp(INSTALL_DATADIR, "/usr/share") &&
+-         get_mono_path_unix(L"\\\\?\\unix/usr/share/wine/mono", path)) ||
+-        get_mono_path_unix(L"\\\\?\\unix/opt/wine/mono", path);
++        get_mono_path_unix(L"\\\\?\\unix" INSTALL_DATADIR "/wine/mono", path);
+ }
+ 
+ struct InstalledRuntimeEnum

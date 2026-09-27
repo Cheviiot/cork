@@ -1,0 +1,18 @@
+vintner: don't hard-fail devcmd setup when the bundled CMake/Ninja is missing.
+
+Same reasoning as the ConnectionManagerExe fix: a missing optional
+component shouldn't abort the whole Developer Command Prompt setup.
+
+diff --git a/Common7/Tools/vsdevcmd/ext/cmake.bat b/Common7/Tools/vsdevcmd/ext/cmake.bat
+index d9a1088..584f141 100644
+--- a/Common7/Tools/vsdevcmd/ext/cmake.bat
++++ b/Common7/Tools/vsdevcmd/ext/cmake.bat
+@@ -10,7 +10,7 @@ set "PATH=%PATH%;%VSINSTALLDIR%Common7\IDE\CommonExtensions\Microsoft\CMake\CMak
+ goto :end
+ 
+ :error_setting_path
+-exit /B 1
++exit /B 0
+ 
+ goto :end
+ 

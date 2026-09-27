@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  VCPKG_DISABLE_METRICS: "1"
+
+jobs:
+  # Скрипты проверяются отдельной job, а не внутри сборки: она занимает
+  # секунды и не должна ждать vcpkg. Приёмочный прогон запускается руками и
+  # ночью, поэтому опечатку в нём иначе замечал бы только ночной прогон.
+  shell:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check the scripts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck
+          shellcheck --severity=warning tools/acceptance/run.sh tools/wine/*.sh \
+                                        tools/toolchain_env.sh
+
+  build:
+    name: ${{ matrix.preset }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [linux-debug, linux-release, linux-asan, linux-tsan]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build cmake g++ pkg-config zip unzip tar curl zstd \
+            autoconf automake libtool autoconf-archive bison flex
+
+      # vcpkg вычекивается ровно на builtin-baseline из vcpkg.json: иначе сборка
+      # в CI и сборка у разработчика берут разные версии портов, и «у меня
+      # работает» перестаёт что-либо значить.
+      - name: Set up vcpkg at the manifest baseline
+        run: |
+          baseline="$(python3 -c 'import json;print(json.load(open("vcpkg.json"))["builtin-baseline"])')"
+          git clone https://github.com/microsoft/vcpkg.git "$RUNNER_TEMP/vcpkg"
+          git -C "$RUNNER_TEMP/vcpkg" checkout --detach "$baseline"
+          "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+          echo "VCPKG_ROOT=$RUNNER_TEMP/vcpkg" >> "$GITHUB_ENV"
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}

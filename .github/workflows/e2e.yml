@@ -1,0 +1,163 @@
+name: Acceptance
+
+# Полный цикл на настоящем тулчейне: download, install, doctor, затем сборка и
+# запуск настоящих программ.
+#
+# Отдельно от CI, потому что нужно три вещи, которых CI ждать не должен:
+# собственная сборка Wine, десятки гигабайт пакетов Microsoft и минуты вместо
+# секунд. Ночью и по кнопке.
+#
+# Чего этот workflow не должен повторить: у предыдущей реализации e2e-набор
+# был, проходил ревью и не запустился ни разу — ни одна job не выставляла
+# переменную, которая его включала. Поэтому вход ровно один и безусловный:
+# приёмочный скрипт запускается, его код возврата — код возврата job.
+
+on:
+  schedule:
+    # 03:20 UTC — тихий час для раннеров.
+    - cron: "20 3 * * *"
+  workflow_dispatch:
+    inputs:
+      with_ogre:
+        description: "Собрать заодно Ogre3D (плюс примерно двадцать минут)"
+        type: boolean
+        default: false
+      cases:
+        description: "Имена случаев через пробел; пусто — все"
+        default: ""
+
+concurrency:
+  group: acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  VCPKG_DISABLE_METRICS: "1"
+  CORK_HOME: ${{ github.workspace }}/.cork-home
+
+jobs:
+  acceptance:
+    name: Acceptance
+    runs-on: ubuntu-latest
+    # Wine с нуля плюс скачивание Microsoft плюс Ogre. Запас намеренный:
+    # ночной прогон, убитый на последнем случае, не говорит ничего.
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: false
+
+      - name: Free up disk space
+        # На раннере свободно около 25 ГБ, а одному только MSVC нужно больше.
+        # Ниже — то, что GitHub кладёт в образ и что этой job не нужно.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost
+          # Пустая переменная превратила бы rm в «удалить текущий каталог».
+          [ -n "${AGENT_TOOLSDIRECTORY:-}" ] && sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          df -h /
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build cmake g++ clang pkg-config zip unzip tar curl zstd \
+            autoconf automake libtool autoconf-archive bison flex \
+            gcc-multilib libc6-dev-i386 xz-utils
+
+      # Сборка Wine — самая дорогая часть, и меняется она только вместе с
+      # submodule или серией патчей. Ключ кэша считается ровно по ним.
+      - name: Work out the Wine cache key
+        id: wine-key
+        run: |
+          sha="$(git ls-tree HEAD wine/src --object-only)"
+          patches="$(sha256sum wine/patches/* wine/configure-flags.txt 2>/dev/null \
+                     | sha256sum | cut -c1-16)"
+          echo "key=wine-${sha}-${patches}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the Wine build
+        id: wine-cache
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: build/wine-staging
+          key: ${{ steps.wine-key.outputs.key }}
+
+      - name: Check out the Wine submodule
+        if: steps.wine-cache.outputs.cache-hit != 'true'
+        run: git submodule update --init --depth 1 wine/src
+
+      - name: Build Wine
+        if: steps.wine-cache.outputs.cache-hit != 'true'
+        run: tools/wine/build.sh --jobs "$(nproc)"
+
+      - name: Save the Wine build
+        if: steps.wine-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: build/wine-staging
+          key: ${{ steps.wine-key.outputs.key }}
+
+      - name: Build the PE helper
+        run: tools/wine/build-helper.sh
+
+      - name: Set up vcpkg at the manifest baseline
+        run: |
+          baseline="$(python3 -c 'import json;print(json.load(open("vcpkg.json"))["builtin-baseline"])')"
+          git clone https://github.com/microsoft/vcpkg.git "$RUNNER_TEMP/vcpkg"
+          git -C "$RUNNER_TEMP/vcpkg" checkout --detach "$baseline"
+          "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+          echo "VCPKG_ROOT=$RUNNER_TEMP/vcpkg" >> "$GITHUB_ENV"
+
+      - name: Build cork
+        run: |
+          cmake --preset linux-release
+          cmake --build --preset linux-release
+
+      - name: Put the Wine runtime where cork expects it
+        id: runtime
+        run: |
+          wine_id="$(build/linux-release/cork version | sed -n 's/^wine runtime //p')"
+          [ -n "$wine_id" ] || { echo "cork version did not name a Wine runtime" >&2; exit 1; }
+          mkdir -p "$CORK_HOME/runtime"
+          cp -a build/wine-staging/opt/cork-wine "$CORK_HOME/runtime/$wine_id"
+          echo "CORK_WINE_ID=$wine_id" >> "$GITHUB_ENV"
+          "$CORK_HOME/runtime/$wine_id/bin/wine" --version
+
+      - name: Acceptance
+        # Входы приходят через окружение, а не подстановкой в текст команды:
+        # подставленные, они были бы выполнены оболочкой как код.
+        env:
+          ACCEPTANCE_CASES: ${{ inputs.cases }}
+          ACCEPTANCE_OGRE: ${{ inputs.with_ogre }}
+        run: |
+          # --install, а не отдельным шагом: так ветка скачивания и установки
+          # в самом скрипте оказывается пройденной ночным прогоном, а не
+          # остаётся кодом, который никто не запускает.
+          args=(--cork build/linux-release/cork --install --report acceptance-report.md)
+          if [ "${ACCEPTANCE_OGRE:-}" = "true" ]; then args+=(--with-ogre); fi
+          # Без кавычек намеренно: во входе список имён случаев.
+          # shellcheck disable=SC2086
+          tools/acceptance/run.sh "${args[@]}" ${ACCEPTANCE_CASES:-}
+
+      - name: Report
+        if: always()
+        run: |
+          if [ -f acceptance-report.md ]; then
+            cat acceptance-report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload the logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: acceptance-logs
+          path: |
+            acceptance-report.md
+            ${{ env.CORK_HOME }}/acceptance/logs/
+          retention-days: 14
+          if-no-files-found: warn

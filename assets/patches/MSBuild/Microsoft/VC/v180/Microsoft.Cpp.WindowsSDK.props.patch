@@ -1,0 +1,20 @@
+vintner: let MSBuild find the Windows SDK without the registry.
+
+GetLatestSDKTargetPlatformVersion normally resolves the SDK via the
+registry, which has nothing to find under Wine. Pass it an extra list of
+roots (populated by vintner.props, see the ImportBefore directory next
+to this file) so it can also look directly under the VS install root.
+
+diff --git a/MSBuild/Microsoft/VC/v180/Microsoft.Cpp.WindowsSDK.props b/MSBuild/Microsoft/VC/v180/Microsoft.Cpp.WindowsSDK.props
+index 5003a04..2a785a4 100644
+--- a/MSBuild/Microsoft/VC/v180/Microsoft.Cpp.WindowsSDK.props
++++ b/MSBuild/Microsoft/VC/v180/Microsoft.Cpp.WindowsSDK.props
+@@ -110,7 +110,7 @@ Copyright (C) Microsoft Corporation. All rights reserved.
+     <SDKVersion Condition="'$(SDKVersion)' == ''">10.0</SDKVersion>
+     <SDKDisplayName Condition="'$(SDKDisplayName)' == ''">Windows 10</SDKDisplayName>
+ 
+-    <_LatestWindowsTargetPlatformVersion>$([Microsoft.Build.Utilities.ToolLocationHelper]::GetLatestSDKTargetPlatformVersion($(SDKIdentifier), $(SDKVersion)))</_LatestWindowsTargetPlatformVersion>
++    <_LatestWindowsTargetPlatformVersion>$([Microsoft.Build.Utilities.ToolLocationHelper]::GetLatestSDKTargetPlatformVersion($(SDKIdentifier), $(SDKVersion), $(MsvcGoWine_ExtraSdkRoots.Split(';'))))</_LatestWindowsTargetPlatformVersion>
+     <WindowsTargetPlatformVersion Condition="'$(WindowsTargetPlatformVersion)' == '' and '$(_LatestWindowsTargetPlatformVersion)' != ''">10.0</WindowsTargetPlatformVersion>
+   </PropertyGroup>
+ 

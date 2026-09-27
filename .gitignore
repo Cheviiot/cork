@@ -1,0 +1,12 @@
+# C++
+/build/
+compile_commands.json
+.cache/
+
+# Go (реализация остаётся в дереве до приёмки C++-версии)
+/cork
+*.test
+
+# Инструментальное
+.claude/
+__pycache__/

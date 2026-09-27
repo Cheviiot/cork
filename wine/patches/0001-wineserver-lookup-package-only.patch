@@ -1,0 +1,25 @@
+diff --git a/dlls/ntdll/unix/loader.c b/dlls/ntdll/unix/loader.c
+index ebfb6af..0518451 100644
+--- a/dlls/ntdll/unix/loader.c
++++ b/dlls/ntdll/unix/loader.c
+@@ -517,12 +517,14 @@ static int exec_wineserver( pid_t *pid, char **argv )
+     if (!build_path_and_exec( pid, bin_dir, "wineserver", argv )) return 0;
+     if ((path = getenv( "WINESERVER" )) && !build_path_and_exec( pid, "", path, argv )) return 0;
+ 
+-    if ((path = getenv( "PATH" )))
+-    {
+-        for (path = strtok( strdup( path ), ":" ); path; path = strtok( NULL, ":" ))
+-            if (!build_path_and_exec( pid, path, "wineserver", argv )) return 0;
+-    }
+-    return build_path_and_exec( pid, BINDIR, "wineserver", argv );
++    /* cork: no fallback to a wineserver found in $PATH or at the compiled-in
++     * BINDIR. This build is shipped as a self-contained runtime, and pairing our
++     * loader with a server from an unrelated Wine installation does not fail
++     * cleanly: it corrupts the prefix in ways that only surface much later, in
++     * some unrelated build. Missing server is a broken runtime, so say so. */
++    fatal_error( "wineserver not found next to the wine loader (%s), and $WINESERVER is unset.\n"
++                 "This Wine build is part of a cork runtime and must be used from it.\n",
++                 bin_dir );
+ }
+ 
+ 

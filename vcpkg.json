@@ -1,0 +1,21 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "cork",
+  "version-semver": "0.1.0",
+  "description": "Cross compile with the real MSVC toolchain on Linux via Wine",
+  "homepage": "https://github.com/Cheviiot/cork",
+  "license": "MIT",
+  "builtin-baseline": "a1cae005c39be7b18ba319fced856b68d7276271",
+  "dependencies": [
+    "fmt",
+    "simdjson",
+    "libzip",
+    "zstd",
+    "libmspack",
+    {
+      "name": "curl",
+      "default-features": false,
+      "features": ["ssl", "c-ares"]
+    }
+  ]
+}

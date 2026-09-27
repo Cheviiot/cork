@@ -1,0 +1,64 @@
+# Флаги configure для сборки Wine под cork. Единственный источник правды:
+# читается и tools/wine/build.sh, и CI. Пустые строки и строки с # игнорируются.
+#
+# Смысл набора: инструменты MSVC, которые мы запускаем (cl, link, lib, rc, midl,
+# mc, mt, dumpbin, ml, ml64, nmake, armasm, MSBuild), консольные. Им не нужен
+# ни X11, ни звук, ни видео, ни Vulkan, ни USB, ни Bluetooth. Выбрасывая это на
+# этапе configure, мы убираем и соответствующие библиотеки из зависимостей
+# рантайма — у собранного wine/wineserver в ldd остаётся практически одна libc.
+#
+# Прежде чем добавлять сюда --without-<что-то> ещё, стоит убедиться, что это
+# действительно не нужно MSBuild: он тянет за собой Mono, а тот заметно
+# капризнее консольных инструментов.
+
+# i386 здесь не ради 32-битного хоста, а ради целей x86: собранный для них
+# .exe должен запускаться и проверяться на месте, а не только уезжать на
+# Windows. Без i386 такой файл компилируется и линкуется, но при запуске Wine
+# не находит syswow64/ntdll.dll и падает ещё до main. Цена — заметно более
+# долгая сборка Wine и больший рантайм; цена отсутствия — цель x86, проверить
+# которую нечем.
+--enable-archs=i386,x86_64
+--disable-tests
+--disable-win16
+
+--without-alsa
+--without-capi
+--without-coreaudio
+--without-cups
+--without-dbus
+--without-ffmpeg
+--without-fontconfig
+--without-freetype
+--without-gphoto
+--without-gnutls
+--without-gssapi
+--without-gstreamer
+--without-hwloc
+--without-inotify
+--without-krb5
+--without-netapi
+--without-opencl
+--without-opengl
+--without-oss
+--without-pcap
+--without-pcsclite
+--without-pulse
+--without-sane
+--without-sdl
+--without-udev
+--without-usb
+--without-v4l2
+--without-vulkan
+--without-wayland
+--without-x
+--without-xcomposite
+--without-xcursor
+--without-xfixes
+--without-xinerama
+--without-xinput
+--without-xinput2
+--without-xrandr
+--without-xrender
+--without-xshape
+--without-xshm
+--without-xxf86vm
