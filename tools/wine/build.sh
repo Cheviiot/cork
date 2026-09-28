@@ -9,6 +9,7 @@
 #
 # Использование:
 #   tools/wine/build.sh [--jobs N] [--out DIR] [--clean] [--keep-debug]
+#                       [--keep-devel]
 #
 # По умолчанию результат оказывается в build/wine-staging/opt/cork-wine.
 
@@ -25,6 +26,7 @@ build_dir="$repo_root/build/wine-build"
 install_prefix="/opt/cork-wine"
 clean_build=0
 strip_debug=1
+split_devel=1
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -35,6 +37,7 @@ while [ $# -gt 0 ]; do
         --out) out_dir="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"; shift 2 ;;
         --clean) clean_build=1; shift ;;
         --keep-debug) strip_debug=0; shift ;;
+        --keep-devel) split_devel=0; shift ;;
         -h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
@@ -142,8 +145,19 @@ if [ "$strip_debug" = 1 ]; then
     "$repo_root/tools/wine/split-debug.sh" "$staged" --debug-out "$out_dir-debug$install_prefix"
 fi
 
+# --- devel-часть -------------------------------------------------------------
+# Заголовки, импорт-библиотеки и winegcc уезжают в отдельное дерево: на машине
+# пользователя они не нужны ни разу, PE-хелпер собирается здесь. Состав задан
+# списком в wine/split-rules.txt, и файл, не подошедший ни под одно правило,
+# останавливает сборку — иначе состав артефакта определялся бы тем, что
+# `make install` положил сегодня.
+if [ "$split_devel" = 1 ]; then
+    "$repo_root/tools/wine/split-devel.sh" "$staged" --sdk-out "$out_dir-sdk$install_prefix"
+fi
+
 # --- дымовая проверка --------------------------------------------------------
-# После strip, а не до: проверять надо то, что поедет пользователю.
+# После strip и разделения, а не до: проверять надо то, что поедет
+# пользователю.
 echo "==> smoke test"
 "$staged/bin/wine" --version
 
