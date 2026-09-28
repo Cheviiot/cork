@@ -29,7 +29,10 @@ strip_debug=1
 while [ $# -gt 0 ]; do
     case "$1" in
         --jobs) jobs="$2"; shift 2 ;;
-        --out) out_dir="$2"; shift 2 ;;
+        # DESTDIR разрешается относительно каталога сборки, а не того, где
+        # стоял человек, поэтому относительный --out тихо уезжал внутрь
+        # build/wine-build. Приводим к абсолютному сразу.
+        --out) out_dir="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"; shift 2 ;;
         --clean) clean_build=1; shift ;;
         --keep-debug) strip_debug=0; shift ;;
         -h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}"; exit 0 ;;
