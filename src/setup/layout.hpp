@@ -27,7 +27,11 @@ struct ToolEnvironment {
     std::string lib;
     std::string lib_path;
     std::string wine_path;
+    // Подмены, которые ставятся потомку — самому инструменту.
     std::string wine_dll_overrides;
+    // Подмены, которые обязаны стоять уже на процессе wine. Разделены, потому
+    // что действуют по-разному: см. комментарий в layout.cpp.
+    std::string wine_dll_overrides_host;
 };
 
 ToolEnvironment derive_environment(const Config &, const std::filesystem::path &generation_root,
