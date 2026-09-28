@@ -280,6 +280,21 @@ int cmd_install(const std::vector<std::string> &args) {
         return 1;
     }
 
+    // Рецепт кладётся ещё раз, уже в опубликованный каталог.
+    //
+    // Когда такое поколение уже опубликовано, publish не переименовывает
+    // staging, а удаляет его и переключает current — вместе со staging
+    // пропадает и только что составленный рецепт. Дереву это безразлично:
+    // дайджест тот же, иначе имя было бы другим. А вот состав Wine в
+    // дайджест дерева не входит, потому что рантайм лежит вне поколения, —
+    // и остаётся записанным по прошлой установке. Замечено на том, что
+    // `doctor` после переустановки говорил «168 present, receipt records
+    // 172», хотя оба числа были верны, каждое для своего момента.
+    if (auto r = receipt->save(*published); !r.has_value()) {
+        fmt::print(stderr, "cork install: {}\n", r.error().to_string());
+        return 1;
+    }
+
     for (const auto &arch : report->targets) {
         i18n::say(i18n::Msg::InstalledWrappers, arch);
     }

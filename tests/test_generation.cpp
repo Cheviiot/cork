@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <utility>
 
 #include <unistd.h>
 
@@ -454,6 +455,54 @@ void test_gc_keeps_the_newest_generations_and_the_current_one() {
     CHECK(fs::is_regular_file(third / "bin" / "cl.exe"));
 }
 
+void test_republishing_the_same_tree_drops_the_staging_receipt() {
+    Sandbox box;
+    Root root{box.path() / "home"};
+    CHECK(root.ensure().has_value());
+
+    DigestOptions dopts;
+    dopts.exclude = {kReceiptFileName};
+
+    // Ловушка, из-за которой `doctor` после переустановки говорил «168
+    // present, receipt records 172», хотя оба числа были верны — каждое для
+    // своего момента.
+    //
+    // Дерево то же, значит имя поколения то же, значит publish не
+    // переименовывает staging, а удаляет его и переключает current. Вместе
+    // со staging пропадает и составленный там рецепт. Дереву это
+    // безразлично: дайджест сходится. А состав Wine в дайджест не входит —
+    // рантайм лежит вне поколения, — и остаётся записанным по прошлой
+    // установке.
+    const auto publish_with = [&](std::uint64_t symlinks) {
+        auto s = Staging::create(root);
+        CHECK(s.has_value());
+        write_file(s->path() / "bin" / "cl.exe", "same");
+        Receipt r = make_staged_receipt();
+        r.wine.id = "11.18-mono11.3.0";
+        r.wine.symlinks = symlinks;
+        CHECK(r.save(s->path()).has_value());
+        auto d = digest_tree(s->path(), dopts);
+        CHECK(d.has_value());
+        auto p = s->publish("14.51-10.0", d->digest);
+        CHECK(p.has_value());
+        return std::pair{*p, r};
+    };
+
+    const auto [first, _] = publish_with(172);
+    const auto [again, fresh] = publish_with(168);
+    CHECK_EQ(again.string(), first.string());
+
+    auto stale = Receipt::load(first);
+    CHECK(stale.has_value());
+    CHECK(stale->wine.symlinks == 172);
+
+    // Поэтому install дописывает рецепт в опубликованный каталог сам.
+    CHECK(fresh.save(again).has_value());
+    auto stored = Receipt::load(first);
+    CHECK(stored.has_value());
+    CHECK(stored->wine.symlinks == 168);
+}
+
 } // namespace
 
 int main() {
@@ -470,5 +519,6 @@ int main() {
     test_abandoned_staging_is_not_an_installation();
     test_gc_removes_only_abandoned_directories();
     test_gc_keeps_the_newest_generations_and_the_current_one();
+    test_republishing_the_same_tree_drops_the_staging_receipt();
     return cork::test::finish("test_generation");
 }
