@@ -7,6 +7,7 @@
 #include <fmt/format.h>
 
 #include "cli/commands.hpp"
+#include "exec/session.hpp"
 #include "i18n/messages.hpp"
 #include "setup/doctor.hpp"
 #include "setup/generation.hpp"
@@ -106,6 +107,10 @@ int cmd_doctor(const std::vector<std::string> &args) {
 int cmd_gc(const std::vector<std::string> &args) {
     stdfs::path root_dir;
     int hours = 24;
+    // Ноль значит «поколения не трогать». Умолчание именно такое: у остальных
+    // двух видов мусора занятость видна по блокировке, а у поколения — нет,
+    // см. collect_generations.
+    long keep = 0;
 
     for (std::size_t i = 0; i < args.size(); ++i) {
         const std::string &arg = args[i];
@@ -113,6 +118,12 @@ int cmd_gc(const std::vector<std::string> &args) {
             root_dir = args[++i];
         } else if (arg == "--older-than-hours" && i + 1 < args.size()) {
             hours = std::max(0, std::atoi(args[++i].c_str()));
+        } else if (arg == "--generations" && i + 1 < args.size()) {
+            keep = std::atol(args[++i].c_str());
+            if (keep < 1) {
+                fmt::print(stderr, "cork gc: --generations needs a count of at least 1\n");
+                return 2;
+            }
         } else if (arg == "-h" || arg == "--help") {
             return cmd_help(0);
         } else {
@@ -133,6 +144,26 @@ int cmd_gc(const std::vector<std::string> &args) {
     }
     i18n::say(i18n::Msg::GcRemoved, stats->staging_removed,
               humanize_bytes(stats->bytes_freed));
+
+    // Сессии убирались только попутно, при заводе новой сессии в `cork run`.
+    // Команда, которая называется gc и обещает в справке убрать и сессии,
+    // обязана делать это сама, иначе брошенные префиксы живут до следующей
+    // сборки — то есть ровно в том случае, когда сборок больше нет.
+    if (auto swept = exec::collect_sessions(root, wine_runtime_of(root),
+                                            std::chrono::hours(hours));
+        swept.has_value()) {
+        i18n::say(i18n::Msg::GcSessions, *swept);
+    }
+
+    if (keep > 0) {
+        auto gone = setup::collect_generations(root, static_cast<std::size_t>(keep));
+        if (!gone.has_value()) {
+            fmt::print(stderr, "cork gc: {}\n", gone.error().to_string());
+            return 1;
+        }
+        i18n::say(i18n::Msg::GcGenerations, gone->generations_removed,
+                  humanize_bytes(gone->bytes_freed));
+    }
 
     auto generations = setup::list_generations(root);
     if (generations.has_value()) {

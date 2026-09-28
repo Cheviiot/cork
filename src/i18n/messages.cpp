@@ -88,6 +88,7 @@ const Table &russian() {
         set(Msg::OptForceSession, "удалить сессию, даже если она занята");
         set(Msg::OptForceTemplate, "заменить существующий шаблон");
         set(Msg::OptOlderThanHours, "порог возраста в часах");
+        set(Msg::OptGenerations, "сколько опубликованных поколений оставить, остальные удалить");
         set(Msg::OptArch, "архитектура цели");
         set(Msg::OptShell, "bash, zsh или fish");
 
@@ -127,6 +128,8 @@ const Table &russian() {
         set(Msg::RemovedSession, "Удалена сессия {}\n");
         set(Msg::SessionForDirectory, "Сессия этого каталога: {}\n");
         set(Msg::GcRemoved, "Удалено брошенных сборочных каталогов: {}, освобождено {}\n");
+        set(Msg::GcSessions, "Удалено брошенных сборочных сессий: {}\n");
+        set(Msg::GcGenerations, "Удалено опубликованных поколений: {}, освобождено {}\n");
         set(Msg::GenerationCount, "Опубликованных поколений: {}\n");
         set(Msg::CurrentMarker, "текущее");
 

@@ -268,6 +268,37 @@ Result<GcStats> collect_staging(const Root &root, std::chrono::seconds age) {
     return stats;
 }
 
+Result<GcStats> collect_generations(const Root &root, std::size_t keep) {
+    GcStats stats;
+    auto generations = list_generations(root);
+    if (!generations.has_value()) {
+        return std::unexpected(std::move(generations).error());
+    }
+
+    const auto current = root.resolve_current();
+    std::error_code ec;
+    std::size_t kept = 0;
+    for (const auto &gen : *generations) {
+        // Текущее поколение не удаляется, даже если оно старее порога: на
+        // него показывает вся установка, и его исчезновение — не
+        // освобождение места, а поломка.
+        const bool is_current = current.has_value() && *current == gen;
+        if (kept < keep || is_current) {
+            ++kept;
+            continue;
+        }
+
+        const std::uint64_t size = tree_size(gen);
+        stdfs::remove_all(gen, ec);
+        if (ec) {
+            return err_io(fmt::format("removing {}: {}", gen.string(), ec.message()));
+        }
+        ++stats.generations_removed;
+        stats.bytes_freed += size;
+    }
+    return stats;
+}
+
 Result<std::vector<stdfs::path>> list_generations(const Root &root) {
     std::vector<stdfs::path> out;
     std::error_code ec;
@@ -285,8 +316,12 @@ Result<std::vector<stdfs::path>> list_generations(const Root &root) {
         }
         found.emplace_back(entry.last_write_time(ec), entry.path());
     }
-    std::sort(found.begin(), found.end(),
-              [](const auto &a, const auto &b) { return a.first > b.first; });
+    // Равные mtime разводятся именем: три поколения, опубликованные подряд,
+    // на файловой системе с грубым временем получают одно и то же, а порядок
+    // здесь решает, что удалит сборка мусора.
+    std::sort(found.begin(), found.end(), [](const auto &a, const auto &b) {
+        return a.first != b.first ? a.first > b.first : a.second > b.second;
+    });
     out.reserve(found.size());
     for (auto &[when, path] : found) {
         out.push_back(std::move(path));

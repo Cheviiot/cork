@@ -120,6 +120,7 @@ const std::vector<CommandSpec> &command_table() {
          Msg::CmdGc,
          with_common({
              {"--older-than-hours", "<n>", Msg::OptOlderThanHours},
+             {"--generations", "<n>", Msg::OptGenerations},
          })},
 
         {"env",

@@ -82,6 +82,7 @@ namespace cork::i18n {
     X(OptForceSession, "remove even a session that is in use")                                 \
     X(OptForceTemplate, "replace an existing template")                                        \
     X(OptOlderThanHours, "age threshold, in hours")                                            \
+    X(OptGenerations, "keep this many published generations, remove the rest")                 \
     X(OptArch, "target architecture")                                                          \
     X(OptShell, "bash, zsh or fish")                                                           \
                                                                                                \
@@ -121,6 +122,8 @@ namespace cork::i18n {
     X(RemovedSession, "Removed session {}\n")                                                  \
     X(SessionForDirectory, "Session for this directory: {}\n")                                 \
     X(GcRemoved, "Removed {} abandoned build directories, freed {}\n")                         \
+    X(GcSessions, "Removed {} abandoned build sessions\n")                                     \
+    X(GcGenerations, "Removed {} published generations, freed {}\n")                           \
     X(GenerationCount, "{} published generations\n")                                           \
     X(CurrentMarker, "current")                                                                \
                                                                                                \

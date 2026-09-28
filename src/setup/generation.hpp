@@ -98,6 +98,7 @@ std::string generation_name(std::string_view name, std::string_view tree_digest)
 
 struct GcStats {
     std::uint64_t staging_removed = 0;
+    std::uint64_t generations_removed = 0;
     std::uint64_t bytes_freed = 0;
 };
 
@@ -108,5 +109,18 @@ struct GcStats {
 
 // Опубликованные поколения, от новых к старым.
 [[nodiscard]] Result<std::vector<std::filesystem::path>> list_generations(const Root &);
+
+// Убирает опубликованные поколения, оставляя keep самых новых. Текущее
+// остаётся всегда и считается за одно из оставленных, поэтому keep == 0
+// оставляет ровно его одно.
+//
+// Это единственная часть сборки мусора, которую надо просить явно, и вот
+// почему. Брошенный staging и брошенная сессия ничем не заняты по
+// определению: занятость там видна по блокировке. Поколение занятости не
+// показывает — обёртки инструментов лежат внутри него, и идущая сборка
+// держит его одним лишь тем, что запустила cl по пути внутрь. Отличить
+// «старое» от «ненужного» отсюда нельзя, а поколение весит около двенадцати
+// гигабайт, и ошибка в обе стороны дорогая. Поэтому решает человек.
+[[nodiscard]] Result<GcStats> collect_generations(const Root &, std::size_t keep);
 
 } // namespace cork::setup

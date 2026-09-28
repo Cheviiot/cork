@@ -3,10 +3,18 @@
 // Подкоманды cork. Всё, что печатает пользователю, живёт здесь: слои ниже
 // возвращают значения и не знают ни про stdout, ни про язык интерфейса.
 
+#include <filesystem>
 #include <string>
 #include <vector>
 
+#include "setup/generation.hpp"
+
 namespace cork::cli {
+
+// Путь к своей сборке Wine у текущего поколения. Живёт здесь, а не в слое
+// setup, потому что нужен только командам и только чтобы гасить wineserver
+// сессии её же сервером.
+std::filesystem::path wine_runtime_of(const setup::Root &);
 
 int cmd_download(const std::vector<std::string> &args);
 int cmd_install(const std::vector<std::string> &args);

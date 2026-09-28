@@ -37,6 +37,8 @@ std::string humanize_bytes(std::uint64_t n) {
     return u == 0 ? fmt::format("{} {}", n, units[u]) : fmt::format("{:.1f} {}", v, units[u]);
 }
 
+} // namespace
+
 // Путь к своей сборке Wine у текущего поколения. Нужен, чтобы погасить
 // wineserver сессии её же сервером, а не чужим.
 stdfs::path wine_runtime_of(const setup::Root &root) {
@@ -50,6 +52,8 @@ stdfs::path wine_runtime_of(const setup::Root &root) {
     }
     return root.runtime(cfg->wine_id);
 }
+
+namespace {
 
 // Программа, собранная этой установкой, а не нативная команда. Отличается
 // расширением, и этого достаточно: ELF с именем на .exe — случай, которого в

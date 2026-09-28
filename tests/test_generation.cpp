@@ -4,6 +4,7 @@
 // оставлять дерева, которое выглядит установленным. Поэтому тесты смотрят не
 // на «получилось ли», а на то, что видно снаружи в промежуточных состояниях.
 
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -389,6 +390,70 @@ void test_cmake_toolchain_is_embedded() {
     CHECK(text.find("cl.exe") == std::string::npos);
 }
 
+void test_gc_keeps_the_newest_generations_and_the_current_one() {
+    Sandbox box;
+    Root root{box.path() / "home"};
+    CHECK(root.ensure().has_value());
+
+    DigestOptions dopts;
+    dopts.exclude = {kReceiptFileName};
+
+    // Возраст задаётся явно, а не берётся из момента публикации: три
+    // переименования подряд укладываются в одну отметку времени там, где
+    // файловая система хранит его посекундно, и тогда «самое старое»
+    // перестаёт быть определённым.
+    const auto publish_one = [&](std::string_view content, int age_hours) {
+        auto s = Staging::create(root);
+        CHECK(s.has_value());
+        write_file(s->path() / "bin" / "cl.exe", content);
+        CHECK(make_staged_receipt().save(s->path()).has_value());
+        auto d = digest_tree(s->path(), dopts);
+        CHECK(d.has_value());
+        auto p = s->publish("14.51-10.0", d->digest);
+        CHECK(p.has_value());
+        std::error_code ec;
+        stdfs::last_write_time(*p,
+                               stdfs::file_time_type::clock::now() -
+                                   std::chrono::hours(age_hours),
+                               ec);
+        CHECK(!ec);
+        return *p;
+    };
+
+    // Содержимое разной длины, а не разного текста: дайджест по умолчанию
+    // считается по форме дерева, и три файла в пять байт дали бы одно имя
+    // поколения на всех, то есть один каталог вместо трёх.
+    const stdfs::path first = publish_one("a", 3);
+    const stdfs::path second = publish_one("bb", 2);
+    const stdfs::path third = publish_one("ccc", 1);
+
+    auto gone = collect_generations(root, 2);
+    CHECK(gone.has_value());
+    CHECK(gone->generations_removed == 1);
+    CHECK(gone->bytes_freed > 0);
+
+    auto left = list_generations(root);
+    CHECK(left.has_value());
+    CHECK(left->size() == 2);
+    CHECK(!stdfs::exists(first));
+    CHECK(fs::is_regular_file(second / "bin" / "cl.exe"));
+    CHECK(fs::is_regular_file(third / "bin" / "cl.exe"));
+
+    auto current = root.resolve_current();
+    CHECK(current.has_value());
+    CHECK_EQ(current->string(), third.string());
+
+    // Текущее переживает любое keep, вплоть до нуля: удалить то, на что
+    // показывает вся установка, — не освобождение места, а поломка.
+    auto all = collect_generations(root, 0);
+    CHECK(all.has_value());
+    CHECK(all->generations_removed == 1);
+    auto last = list_generations(root);
+    CHECK(last.has_value());
+    CHECK(last->size() == 1);
+    CHECK(fs::is_regular_file(third / "bin" / "cl.exe"));
+}
+
 } // namespace
 
 int main() {
@@ -404,5 +469,6 @@ int main() {
     test_publishing_a_second_generation_switches_current();
     test_abandoned_staging_is_not_an_installation();
     test_gc_removes_only_abandoned_directories();
+    test_gc_keeps_the_newest_generations_and_the_current_one();
     return cork::test::finish("test_generation");
 }
