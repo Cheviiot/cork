@@ -478,7 +478,6 @@ int run_tool(std::string_view tool, const std::vector<std::string> &args,
         "WINEPATH=" + tool_env.wine_path,
         "WINEPREFIX=" + prefix.string(),
         "WINEDEBUG=" + env_or("WINEDEBUG", "-all"),
-        "WINEDLLOVERRIDES=" + tool_env.wine_dll_overrides_host,
     };
     // MSBuild ищет компилятор и SDK через реестр, которого под Wine нет.
     // Всё, что ниже, переводит этот поиск на переменные окружения — см.
