@@ -259,7 +259,12 @@ Result<void> close_session(const setup::Root &root, const std::string &key,
                 fmt::format("session '{}' is still in use after killing its Wine server", key));
         }
         lock = std::move(again);
-    } else if (force) {
+    } else {
+        // Гасим всегда, а не только при --force. В префиксе сессии может
+        // жить сервер PDB, поднятый для `cl /FS`, а сам он не выйдет
+        // никогда. Снести каталог, не погасив его, значит оставить его
+        // работать на пустом месте: каждая сборка в Debug добавляла бы по
+        // такому процессу.
         kill_prefix(wine_runtime, dir / "prefix");
     }
 

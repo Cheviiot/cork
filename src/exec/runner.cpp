@@ -5,7 +5,9 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <fcntl.h>
@@ -148,13 +150,11 @@ void warn_about_slow_prefixes(const setup::Root &root, const Session &session) {
     (void)fs::write_atomic(marker, std::string_view("1"));
 }
 
-void bootstrap_prefix(const stdfs::path &wine, const stdfs::path &prefix) {
-    const stdfs::path marker = prefix / ".cork-bootstrapped";
-    if (fs::exists_no_follow(marker)) {
-        return;
-    }
-    (void)fs::mkdir_p(prefix);
-
+// Запуск со stdio в /dev/null, с ожиданием завершения. Отдельной функцией,
+// потому что бутстрап префикса — это несколько таких запусков подряд, и
+// разница между ними только в аргументах.
+void run_quiet(const stdfs::path &prefix, const stdfs::path &program,
+               std::initializer_list<const char *> args, const char *wine_path = nullptr) {
     const pid_t pid = ::fork();
     if (pid < 0) {
         return;
@@ -169,12 +169,134 @@ void bootstrap_prefix(const stdfs::path &wine, const stdfs::path &prefix) {
         ::setsid();
         ::setenv("WINEPREFIX", prefix.c_str(), 1);
         ::setenv("WINEDEBUG", "-all", 1);
-        ::execl(wine.c_str(), wine.c_str(), "wineboot", "--init", nullptr);
+        if (wine_path != nullptr) {
+            ::setenv("WINEPATH", wine_path, 1);
+        }
+        std::vector<char *> argv;
+        argv.push_back(const_cast<char *>(program.c_str()));
+        for (const char *a : args) {
+            argv.push_back(const_cast<char *>(a));
+        }
+        argv.push_back(nullptr);
+        ::execv(program.c_str(), argv.data());
         ::_exit(127);
     }
     int status = 0;
     ::waitpid(pid, &status, 0);
+}
+
+// Запуск сервера PDB. Отсоединённо, потому что `-start -spawn` не
+// завершается: он и есть сам сервер. Двойной fork — чтобы не оставить зомби,
+// ждать этого ребёнка некому.
+void start_pdb_server(const stdfs::path &prefix, const stdfs::path &wine,
+                      const stdfs::path &mspdbsrv, const char *wine_path) {
+    const pid_t pid = ::fork();
+    if (pid < 0) {
+        return;
+    }
+    if (pid == 0) {
+        if (::fork() == 0) {
+            const int null_fd = ::open("/dev/null", O_RDWR);
+            if (null_fd >= 0) {
+                ::dup2(null_fd, STDIN_FILENO);
+                ::dup2(null_fd, STDOUT_FILENO);
+                ::dup2(null_fd, STDERR_FILENO);
+            }
+            ::setsid();
+            ::setenv("WINEPREFIX", prefix.c_str(), 1);
+            ::setenv("WINEDEBUG", "-all", 1);
+            if (wine_path != nullptr) {
+                ::setenv("WINEPATH", wine_path, 1);
+            }
+            ::execl(wine.c_str(), wine.c_str(), mspdbsrv.c_str(), "-start", "-spawn", nullptr);
+            ::_exit(127);
+        }
+        ::_exit(0);
+    }
+    int status = 0;
+    ::waitpid(pid, &status, 0);
+}
+
+void bootstrap_prefix(const stdfs::path &wine, const stdfs::path &prefix) {
+    const stdfs::path marker = prefix / ".cork-bootstrapped";
+    if (fs::exists_no_follow(marker)) {
+        return;
+    }
+    (void)fs::mkdir_p(prefix);
+    const stdfs::path wineserver = wine.parent_path() / "wineserver";
+
+    // wineboot — только если префикс и правда не загружен. Сессионный
+    // префикс клонируется из шаблона, который загружен целиком, и повторный
+    // wineboot ему не нужен. Хуже того: он вреден.
+    //
+    // Измерено, шесть свежих клонов на вариант, засчитывается первая попытка:
+    // без прогрева `cl /Zi /FS` проходит 6 раз из 6, а после
+    // `wineboot --init` — 4 из 6, с `C1902: Program database manager
+    // mismatch`. wineboot перезапускает службы, и первая компиляция с /FS
+    // попадает в гонку с их запуском: `/FS` работает через отдельный процесс
+    // mspdbsrv.exe, которому службы нужны. Сообщение об ошибке не упоминает
+    // ни префикса, ни служб, поэтому сказано здесь.
+    if (!fs::is_regular_file(prefix / "system.reg")) {
+        run_quiet(prefix, wine, {"wineboot", "--init"});
+        // Реестр пишет wineserver при выходе, а не wineboot. Без ожидания
+        // префикс остаётся без служб, и первая же /FS отказывает.
+        if (fs::is_regular_file(wineserver)) {
+            run_quiet(prefix, wineserver, {"-w"});
+        }
+    }
+
+    // Службы поднимаются от процесса со stdio в /dev/null. Иначе их поднимет
+    // первый настоящий вызов инструмента — и они унаследуют его конвейеры,
+    // после чего EOF на них не придёт никогда.
+    //
+    // `wineserver -p` здесь не нужен, хотя и напрашивается: сервер и так не
+    // выходит, пока в префиксе жив хоть один процесс Windows, а сервер PDB
+    // ниже как раз такой. Зато с `-p` он не выходит и когда не жив никто, то
+    // есть каждая законченная сборка оставляла бы по паре процессов до
+    // следующей сборки мусора — на приёмочном прогоне это девять и девять.
+    run_quiet(prefix, wine, {"winepath", "-w", "C:\\"});
+
     (void)fs::write_atomic(marker, std::string_view("1"));
+}
+
+// Нужен ли этому вызову сервер PDB. /FS — единственный ключ, который его
+// включает; /Zi без /FS пишет PDB сам. Проверяется и содержимое
+// response-файлов: MSBuild передаёт ключи через них.
+bool wants_pdb_server(const std::vector<std::string> &args) {
+    return std::any_of(args.begin(), args.end(), [](const std::string &a) {
+        return a == "/FS" || a == "-FS";
+    });
+}
+
+// Поднимает сервер PDB в префиксе, один раз.
+//
+// Не при заводе сессии, а при первом вызове с /FS, и это не экономия
+// запуска: сервер не выходит сам, пока жив префикс сессии, — значит сессия,
+// которая никогда не собирала с /FS, иначе держала бы его до сборки мусора
+// ни за чем.
+//
+// Почему вообще мы, а не сам `cl`. Сервер один на всю сборку, а job — свой у
+// каждого вызова инструмента. Подними его первый же `cl`, он оказался бы в
+// job ЭТОГО вызова и умер вместе с ним по KILL_ON_JOB_CLOSE, а остальные
+// `cl`, пишущие в тот же PDB, получили бы
+// `C1090: PDB API call failed, error code '23'` — это 0x6BA,
+// RPC_S_SERVER_UNAVAILABLE. На сборке из девяти файлов через ninja это
+// происходит регулярно; на одном файле не видно вовсе, потому что терять
+// сервер некому.
+void ensure_pdb_server(const stdfs::path &wine, const stdfs::path &prefix,
+                       const setup::ToolEnvironment &tool_env) {
+    const stdfs::path marker = prefix / ".cork-pdb-server";
+    if (fs::exists_no_follow(marker)) {
+        return;
+    }
+    const stdfs::path mspdbsrv = tool_env.host_bin / "mspdbsrv.exe";
+    if (!fs::is_regular_file(mspdbsrv)) {
+        return;
+    }
+    // Маркер ставится до запуска, а не после: два параллельных `cl` иначе
+    // поднимут по серверу каждый.
+    (void)fs::write_atomic(marker, std::string_view("1"));
+    start_pdb_server(prefix, wine, mspdbsrv, tool_env.wine_path.c_str());
 }
 
 struct Pipe {
@@ -416,6 +538,8 @@ int run_tool(std::string_view tool, const std::vector<std::string> &args,
     }
     bootstrap_prefix(*wine, prefix);
 
+    const setup::ToolEnvironment tool_env = setup::derive_environment(*cfg, root, arch);
+
     // --- запрос для хелпера ---
     const stdfs::path run_dir = home->base / "run" / std::to_string(::getpid());
     if (auto r = fs::mkdir_p(run_dir); !r.has_value()) {
@@ -445,6 +569,13 @@ int run_tool(std::string_view tool, const std::vector<std::string> &args,
     const PathMode path_mode = path_mode_from_env();
     request.path_refs = path_argument_refs(spec->name, args, path_mode);
     request.flags = proto::kTranslatePaths;
+    // Лазейка на случай инструмента, которому job мешает. Она снимает
+    // гарантию удержания — процессы, ушедшие через setsid(), переживут
+    // сборку, — поэтому включается только руками и никогда сама.
+    if (const char *job = std::getenv("CORK_JOB");
+        job != nullptr && std::string_view(job) == "off") {
+        request.flags |= proto::kNoJob;
+    }
 
     // Response-файлы: «@путь» со списком аргументов внутри. Ими пользуется всё,
     // что генерирует длинные командные строки, поэтому без разбора здесь пути
@@ -469,8 +600,15 @@ int run_tool(std::string_view tool, const std::vector<std::string> &args,
         request.flags |= proto::kTranslateResponseFiles;
     }
 
+    // После разбора response-файлов, а не до: MSBuild и всё, что порождает
+    // длинные командные строки, кладут ключи внутрь @rsp, и /FS там же.
+    if (wants_pdb_server(request.args) ||
+        std::any_of(request.response_files.begin(), request.response_files.end(),
+                    [](const proto::ResponseFile &rf) { return wants_pdb_server(rf.args); })) {
+        ensure_pdb_server(*wine, prefix, tool_env);
+    }
+
     // --- окружение ---
-    const setup::ToolEnvironment tool_env = setup::derive_environment(*cfg, root, arch);
     std::vector<std::string> env_entries = {
         "INCLUDE=" + tool_env.include,
         "LIB=" + tool_env.lib,

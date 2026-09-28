@@ -28,6 +28,9 @@ struct ToolEnvironment {
     std::string lib_path;
     std::string wine_path;
     std::string wine_dll_overrides;
+    // Каталог инструментов хостовой архитектуры. Здесь лежит mspdbsrv.exe,
+    // который сессия поднимает заранее, — см. bootstrap_prefix.
+    std::filesystem::path host_bin;
 };
 
 ToolEnvironment derive_environment(const Config &, const std::filesystem::path &generation_root,

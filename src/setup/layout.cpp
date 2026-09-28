@@ -100,8 +100,9 @@ ToolEnvironment derive_environment(const Config &cfg, const stdfs::path &root,
     // Третьим — каталог инструментов ХОСТОВОЙ архитектуры, уже в полной
     // нотации: там лежат mspdbcore.dll и её соседи, без которых компилятор
     // для x86 не находит собственные библиотеки.
-    wine_path.push_back(to_wine_path(root / (std::string("vc/tools/msvc/") + cfg.msvc_version +
-                                             "/bin/Host" + cfg.host_arch + "/" + cfg.host_arch)));
+    env.host_bin = root / (std::string("vc/tools/msvc/") + cfg.msvc_version + "/bin/Host" +
+                           cfg.host_arch + "/" + cfg.host_arch);
+    wine_path.push_back(to_wine_path(env.host_bin));
     // Последними — отладочные библиотеки времени выполнения, двумя частями.
     //
     // Без них программа, собранная с /MDd, не стартует вовсе, и это не
