@@ -49,6 +49,9 @@ CASES=(
     incremental         "second build does nothing"
     parallel            "two builds at once, one session each"
     interrupt           "Ctrl-C mid-build leaves no Wine processes behind"
+    ctest               "ctest runs the Windows binaries it just built"
+    winsysroot          "clang-cl builds against the tree as a /winsysroot"
+    ccache              "ccache caches compilations through the wrappers"
     offline             "a repeat build with the network taken away"
     ogre                "Ogre3D 14.5.2, OgreMain (slow, needs --with-ogre)"
 )
@@ -646,6 +649,93 @@ EOF
         return 1
     fi
     NOTE="interrupted mid-build, no processes or session left"
+}
+
+case_ctest() {
+    command -v cmake >/dev/null && command -v ctest >/dev/null || { skip_case "no cmake/ctest"; return 77; }
+    command -v ninja >/dev/null || { skip_case "no ninja"; return 77; }
+    local toolchain="$CORK_ROOT/toolchains/current/share/cork-toolchain.cmake"
+    [ -f "$toolchain" ] || { skip_case "no toolchain file"; return 77; }
+    workdir ctest
+    mkdir -p src
+    printf '#include <stdio.h>\nint main(int c, char **v) { printf("%%s\\n", c > 1 ? v[1] : "no arg"); return c > 1 ? 0 : 3; }\n' > src/main.c
+    cat > CMakeLists.txt <<'EOF'
+cmake_minimum_required(VERSION 3.28)
+project(emu C)
+enable_testing()
+add_executable(emu src/main.c)
+add_test(NAME runs COMMAND emu hello)
+add_test(NAME exit_code COMMAND emu)
+set_tests_properties(exit_code PROPERTIES WILL_FAIL TRUE)
+EOF
+    export PATH="$CORK_ROOT/toolchains/current/bin/x64:$PATH"
+    cmake -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE="$toolchain" > cfg.log 2>&1 || { cat cfg.log; return 1; }
+
+    # То, ради чего случай написан: без CMAKE_CROSSCOMPILING_EMULATOR CMake
+    # запишет в тесты голый .exe и ctest не запустит ни одного. Смотреть надо
+    # в сгенерированный CTestTestfile, а не в кэш: toolchain-файл заводит
+    # обычную переменную, и в CMakeCache.txt она не попадает.
+    expect_contains "$(cat build/CTestTestfile.cmake)" "\"run\" \"--\"" || return 1
+
+    "$CORK_BIN" run -- cmake --build build > build.log 2>&1 || { cat build.log; return 1; }
+    local out
+    out="$(cd build && ctest --output-on-failure 2>&1)" || { echo "$out"; return 1; }
+    echo "$out"
+    expect_contains "$out" "100% tests passed" || return 1
+    NOTE="ctest ran both cases through the emulator"
+}
+
+case_winsysroot() {
+    command -v clang-cl >/dev/null || { skip_case "no clang-cl"; return 77; }
+    # Компоновщик тоже нативный: link.exe — это PE, и clang-cl на Linux его
+    # просто не запустит. lld-link умеет то же самое и работает здесь.
+    command -v lld-link >/dev/null || { skip_case "no lld-link"; return 77; }
+    workdir winsysroot
+    # windows.h строчными нарочно: именно так пишут в коде, и именно это не
+    # находится без символьных ссылок регистра. Wine ищет без учёта регистра
+    # сам, clang-cl на Linux — нет.
+    cat > a.c <<'EOF'
+#include <stdio.h>
+#include <windows.h>
+int main(void) { printf("winsysroot ok %lu\n", (unsigned long)GetTickCount()); return 0; }
+EOF
+    local out
+    out="$(clang-cl --target=x86_64-pc-windows-msvc \
+             /winsysroot "$CORK_ROOT/toolchains/current" \
+             -fuse-ld=lld /nologo a.c /Fea.exe 2>&1)" || { echo "$out"; return 1; }
+    echo "$out"
+    [ -f a.exe ] || { echo "no a.exe produced"; return 1; }
+    pe_machine a.exe
+    # Собранное clang-cl запускается тем же cork: два компилятора, один
+    # рантайм.
+    local ran
+    ran="$("$CORK_BIN" run -- ./a.exe 2>&1)" || { echo "$ran"; return 1; }
+    expect_contains "$ran" "winsysroot ok" || return 1
+    NOTE="clang-cl compiled and linked against the generation"
+}
+
+case_ccache() {
+    command -v ccache >/dev/null || { skip_case "no ccache"; return 77; }
+    workdir ccache
+    printf '#include <stdio.h>\nint main(void) { printf("cached\\n"); return 0; }\n' > a.c
+    export PATH="$CORK_ROOT/toolchains/current/bin/x64:$PATH"
+    export CCACHE_DIR="$CASE_DIR/cache"
+    ccache --zero-stats > /dev/null 2>&1
+
+    # Дважды одно и то же: первый раз мимо кэша, второй обязан попасть.
+    # Кеш гоняет `cl /EP` сам, поэтому случай заодно проверяет, что
+    # препроцессор через обёртку отдаёт то, что можно сравнить.
+    ccache cl /nologo /c a.c /Foa1.obj > first.log 2>&1 || { cat first.log; return 1; }
+    ccache cl /nologo /c a.c /Foa2.obj > second.log 2>&1 || { cat second.log; return 1; }
+
+    local stats hits
+    stats="$(ccache --show-stats)"
+    echo "$stats"
+    hits="$(ccache --print-stats | awk -F'\t' '$1 == "direct_cache_hit" || $1 == "preprocessed_cache_hit" { n += $2 } END { print n + 0 }')"
+    echo "cache hits: $hits"
+    [ "$hits" -ge 1 ] || { echo "the second compilation did not hit the cache"; return 1; }
+    cmp -s a1.obj a2.obj || { echo "the cached object differs from the compiled one"; return 1; }
+    NOTE="second compilation served from cache, object identical"
 }
 
 case_offline() {

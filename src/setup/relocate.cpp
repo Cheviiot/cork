@@ -1,8 +1,7 @@
 #include "setup/relocate.hpp"
 
-#include <cctype>
-
 #include <algorithm>
+#include <cctype>
 #include <map>
 #include <string>
 #include <vector>
@@ -285,6 +284,247 @@ Result<void> create_layout_links(const stdfs::path &dest) {
         }
     }
     return {};
+}
+
+std::string lower_of(std::string name) {
+    std::transform(name.begin(), name.end(), name.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return name;
+}
+
+// Настоящие имена в каталоге, разложенные по строчному варианту. Читается
+// один раз на каталог: обходить его заново на каждое включение значило бы
+// перечитать дерево SDK тысячи раз.
+using DirIndex = std::map<std::string, std::string>;
+
+const DirIndex &index_of(std::map<std::string, DirIndex> &cache, const stdfs::path &dir) {
+    auto it = cache.find(dir.string());
+    if (it != cache.end()) {
+        return it->second;
+    }
+    DirIndex names;
+    std::error_code ec;
+    for (const auto &entry : stdfs::directory_iterator(dir, ec)) {
+        if (ec) {
+            break;
+        }
+        // Настоящие имена, не наши же ссылки: иначе получится ссылка на
+        // ссылку, и первая же перестановка дерева их порвёт.
+        if (entry.is_symlink(ec)) {
+            continue;
+        }
+        names.emplace(lower_of(entry.path().filename().string()),
+                      entry.path().filename().string());
+    }
+    return cache.emplace(dir.string(), std::move(names)).first->second;
+}
+
+// Имена файлов из директив #include в тексте заголовка. Нужен не разбор C, а
+// ровно те написания, которыми SDK ссылается сам на себя: `winnt.h` включает
+// "DriverSpecs.h", а на диске лежит driverspecs.h, и без ссылки clang-cl до
+// него не доберётся.
+void collect_includes(const stdfs::path &file, std::vector<std::string> &out) {
+    auto text = fs::read_file(file);
+    if (!text.has_value()) {
+        return;
+    }
+    std::string_view rest{*text};
+    while (true) {
+        const auto at = rest.find("#include");
+        if (at == std::string_view::npos) {
+            break;
+        }
+        rest.remove_prefix(at + 8);
+        const auto open = rest.find_first_of("\"<");
+        if (open == std::string_view::npos) {
+            break;
+        }
+        // Директива кончается на строке: если до конца строки кавычки нет,
+        // это не включение, а текст, похожий на него.
+        const auto eol = rest.find('\n');
+        if (eol != std::string_view::npos && open > eol) {
+            continue;
+        }
+        const char closing = rest[open] == '"' ? '"' : '>';
+        const auto close = rest.find(closing, open + 1);
+        if (close == std::string_view::npos) {
+            break;
+        }
+        out.emplace_back(rest.substr(open + 1, close - open - 1));
+        rest.remove_prefix(close + 1);
+    }
+}
+
+// Создаёт по пути spelling недостающие ссылки регистра внутри root.
+// Возвращает, сколько создано.
+std::uint64_t alias_path(const stdfs::path &root, std::string_view spelling,
+                         std::map<std::string, DirIndex> &cache) {
+    stdfs::path here = root;
+    std::uint64_t made = 0;
+    std::error_code ec;
+
+    const stdfs::path wanted{spelling};
+    for (const auto &part : wanted) {
+        const std::string name = part.string();
+        if (name.empty() || name == "." || name == "..") {
+            return made;
+        }
+        if (fs::exists_no_follow(here / name)) {
+            here /= name;
+            continue;
+        }
+        const DirIndex &names = index_of(cache, here);
+        const auto found = names.find(lower_of(name));
+        if (found == names.end()) {
+            return made;  // такого файла нет ни в каком написании
+        }
+        stdfs::create_symlink(found->second, here / name, ec);
+        if (ec) {
+            ec.clear();
+            return made;
+        }
+        ++made;
+        here /= found->second;
+    }
+    return made;
+}
+
+Result<std::uint64_t> create_case_aliases(const stdfs::path &dest) {
+    // Только там, где ищут заголовки и библиотеки. Проходить всё дерево
+    // незачем: в bin/ и MSBuild/ регистр никого не спасает, а ссылок стало
+    // бы вдвое больше без пользы.
+    // Корни — именно те каталоги, в которых компилятор ищет заголовки, а не
+    // их родители. Разница существенная: `#include "DriverSpecs.h"` из
+    // shared/kernelspecs.h разрешается относительно shared/, и поиск от
+    // Include/<версия> не нашёл бы ничего.
+    std::vector<stdfs::path> roots;
+    std::error_code ec;
+    const stdfs::path kits_include = dest / "Windows Kits" / "10" / "Include";
+    if (fs::is_dir(kits_include)) {
+        for (const auto &version : stdfs::directory_iterator(kits_include, ec)) {
+            if (ec) {
+                break;
+            }
+            if (!version.is_directory(ec) || version.is_symlink(ec)) {
+                continue;
+            }
+            for (const auto &part : stdfs::directory_iterator(version.path(), ec)) {
+                if (ec) {
+                    break;
+                }
+                if (part.is_directory(ec) && !part.is_symlink(ec)) {
+                    roots.push_back(part.path());
+                }
+            }
+        }
+    }
+    ec.clear();
+    const stdfs::path msvc = dest / "VC" / "Tools" / "MSVC";
+    if (fs::is_dir(msvc)) {
+        for (const auto &version : stdfs::directory_iterator(msvc, ec)) {
+            if (ec) {
+                break;
+            }
+            if (!version.is_directory(ec) || version.is_symlink(ec)) {
+                continue;
+            }
+            for (const auto &sub : {version.path() / "include",
+                                    version.path() / "atlmfc" / "include"}) {
+                if (fs::is_dir(sub)) {
+                    roots.push_back(sub);
+                }
+            }
+        }
+    }
+    ec.clear();
+    if (fs::is_dir(dest / "DIA SDK" / "include")) {
+        roots.push_back(dest / "DIA SDK" / "include");
+    }
+    const stdfs::path lib_roots[] = {dest / "Windows Kits" / "10" / "Lib",
+                                     dest / "DIA SDK" / "lib"};
+
+    std::uint64_t made = 0;
+    std::map<std::string, DirIndex> cache;
+
+    // Правило первое: строчный вариант рядом с каждым именем, где есть
+    // заглавные. Покрывает то, что пишут в коде: `#include <windows.h>`
+    // работает на Windows и под Wine, потому что там регистр не важен.
+    std::vector<stdfs::path> mixed_case;
+    for (const auto &root : roots) {
+        for (stdfs::recursive_directory_iterator it(
+                 root, stdfs::directory_options::skip_permission_denied, ec);
+             it != stdfs::recursive_directory_iterator(); it.increment(ec)) {
+            if (ec) {
+                break;
+            }
+            if (!it->is_symlink(ec) &&
+                lower_of(it->path().filename().string()) != it->path().filename().string()) {
+                mixed_case.push_back(it->path());
+            }
+        }
+        ec.clear();
+    }
+    for (const auto &lib_root : lib_roots) {
+        if (!fs::is_dir(lib_root)) {
+            continue;
+        }
+        for (stdfs::recursive_directory_iterator it(
+                 lib_root, stdfs::directory_options::skip_permission_denied, ec);
+             it != stdfs::recursive_directory_iterator(); it.increment(ec)) {
+            if (ec) {
+                break;
+            }
+            if (!it->is_symlink(ec) &&
+                lower_of(it->path().filename().string()) != it->path().filename().string()) {
+                mixed_case.push_back(it->path());
+            }
+        }
+        ec.clear();
+    }
+    for (const auto &target : mixed_case) {
+        const stdfs::path link = target.parent_path() / lower_of(target.filename().string());
+        if (fs::exists_no_follow(link)) {
+            continue;
+        }
+        // Относительная ссылка, на соседа: дерево поколения переносят
+        // целиком, и абсолютный путь пережил бы переезд только до первого
+        // обращения.
+        stdfs::create_symlink(target.filename(), link, ec);
+        if (ec) {
+            ec.clear();
+            continue;
+        }
+        ++made;
+    }
+
+    // Правило второе: написания, которыми SDK ссылается сам на себя.
+    // Строчного варианта тут мало — `winnt.h` включает "DriverSpecs.h", а на
+    // диске driverspecs.h, и перечислить все смешанные написания заранее
+    // нельзя. Зато можно прочитать, какие нужны: их конечное число, и они
+    // написаны в самих заголовках.
+    std::vector<std::string> spellings;
+    for (const auto &root : roots) {
+        for (stdfs::recursive_directory_iterator it(
+                 root, stdfs::directory_options::skip_permission_denied, ec);
+             it != stdfs::recursive_directory_iterator(); it.increment(ec)) {
+            if (ec) {
+                break;
+            }
+            if (it->is_regular_file(ec) && !it->is_symlink(ec)) {
+                collect_includes(it->path(), spellings);
+            }
+        }
+        ec.clear();
+    }
+    std::sort(spellings.begin(), spellings.end());
+    spellings.erase(std::unique(spellings.begin(), spellings.end()), spellings.end());
+
+    for (const auto &spelling : spellings) {
+        for (const auto &root : roots) {
+            made += alias_path(root, spelling, cache);
+        }
+    }
+    return made;
 }
 
 } // namespace cork::setup

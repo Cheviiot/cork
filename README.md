@@ -7,8 +7,7 @@
 Microsoft's own C++ compiler, on a Linux machine, under its own name.
 
 ```console
-$ cork download --accept-license
-$ cork install
+$ cork setup --accept-license
 $ export PATH=~/.cork/toolchains/current/bin/x64:$PATH
 
 $ cl /nologo hello.c /Fehello.exe
@@ -29,11 +28,59 @@ building code that only ever compiled on Windows.
 A 64-bit Linux machine and roughly 12 GB of disk: about 3 GB of downloads
 kept for reuse, 7 GB of unpacked toolchain, the rest Wine and its prefix.
 
-Nothing else. cork carries its own Wine, unpacks Microsoft's installers
-itself, and asks nothing of your package manager — there is no `wine`,
+Nothing else. You install cork; cork does the rest. It fetches Microsoft's
+packages and its own Wine, unpacks the installers itself, prepares the Wine
+prefix, and asks nothing of your package manager — there is no `wine`,
 `msitools`, `cabextract` or `git` to install first.
 
+One command, and the only question in it is the one that cannot be answered
+for you: Microsoft's licence has to be accepted by the person installing,
+not by the program.
+
 Targets today: `x64`, `x86` and `arm64` Windows, from an x86-64 Linux host.
+
+## Fitting into a build
+
+cork installs the pieces other build systems expect, so the toolchain is
+something you point at, not something you wrap by hand.
+
+```console
+$ eval "$(cork env)"                 # PATH and $CORK_TOOLCHAIN_FILE
+
+# CMake, and ctest runs the Windows binaries it just built
+$ cmake -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE="$CORK_TOOLCHAIN_FILE"
+$ cork run -- cmake --build build
+$ cd build && ctest
+
+# Meson, with the same ability to run what it builds
+$ meson setup build --cross-file ~/.cork/toolchains/current/share/cork-x64-cross.ini
+
+# vcpkg, so dependencies are built with the same compiler as your code
+$ vcpkg install zlib --triplet x64-windows \
+      --overlay-triplets ~/.cork/toolchains/current/share
+```
+
+Targets can be named either way: `x64` or `x86_64-pc-windows-msvc`, `x86` or
+`i686-pc-windows-msvc`, `arm64` or `aarch64-pc-windows-msvc`. Whichever your
+other tools taught you is the one that works.
+
+`ccache` works through the wrappers — the second compilation is served from
+the cache and the object file is identical.
+
+The installed tree is laid out the way Visual Studio lays one out, so it also
+serves as a `/winsysroot` for clang-cl if you would rather not go through
+Wine at all:
+
+```console
+$ clang-cl --target=x86_64-pc-windows-msvc \
+      /winsysroot ~/.cork/toolchains/current -fuse-ld=lld /nologo a.c /Fea.exe
+$ cork run -- ./a.exe
+```
+
+Two compilers, one runtime. cork adds the case-variant symlinks that a
+case-sensitive filesystem needs for this to work at all — the SDK ships
+`Windows.h`, code writes `windows.h`, and `kernelspecs.h` asks for
+`DriverSpecs.h` when the file on disk is `driverspecs.h`.
 
 ## What it is careful about
 

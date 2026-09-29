@@ -48,6 +48,9 @@ tools/acceptance/run.sh --report acceptance-$(date +%F).md
 | `parallel` | две сборки одновременно, у каждой своя сессия, обе убираются |
 | `offline` | сборка и запуск при полностью отсутствующей сети |
 | `interrupt` | Ctrl-C посреди сборки: ни процессов Wine, ни каталога сессии |
+| `ctest` | `ctest` запускает собранные `.exe` через `CMAKE_CROSSCOMPILING_EMULATOR` |
+| `winsysroot` | clang-cl собирает по нашему дереву как по `/winsysroot` |
+| `ccache` | вторая компиляция из кэша, объектный файл совпадает побайтово |
 | `ogre` | Ogre3D 14.5.2, цель `OgreMain` |
 
 ## Что проверяется руками
