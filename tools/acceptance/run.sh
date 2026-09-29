@@ -48,6 +48,7 @@ CASES=(
     msbuild             "a real .vcxproj through MSBuild"
     incremental         "second build does nothing"
     parallel            "two builds at once, one session each"
+    interrupt           "Ctrl-C mid-build leaves no Wine processes behind"
     offline             "a repeat build with the network taken away"
     ogre                "Ogre3D 14.5.2, OgreMain (slow, needs --with-ogre)"
 )
@@ -562,6 +563,80 @@ EOF
     left="$("$CORK_BIN" session list 2>&1 | grep -c .)"
     echo "sessions left: $left"
     NOTE="two concurrent builds, sessions cleaned up"
+}
+
+# Сколько процессов Wine этой установки живёт прямо сейчас. Считается по
+# полному пути, а не по имени: на машине может идти чужая сборка под системным
+# Wine, и засчитывать её было бы неверно.
+cork_wine_processes() {
+    ps -eo args= | grep -c "^$CORK_ROOT/\(runtime\|toolchains\)/" || true
+}
+
+case_interrupt() {
+    command -v cmake >/dev/null && command -v ninja >/dev/null || { skip_case "no cmake/ninja"; return 77; }
+    local toolchain="$CORK_ROOT/toolchains/current/share/cork-toolchain.cmake"
+    [ -f "$toolchain" ] || { skip_case "no toolchain file"; return 77; }
+    workdir interrupt
+    mkdir -p src
+    # Сборка должна быть достаточно длинной, чтобы Ctrl-C попал в середину, и
+    # достаточно тяжёлой, чтобы к этому моменту жили и компилятор, и сервер
+    # PDB. Шестнадцать единиц трансляции в Debug с /FS дают и то, и другое.
+    local i
+    for i in $(seq 1 16); do
+        {
+            printf '#include <cstdio>\ntemplate<int N> struct F { static long long v() { return N * F<N-1>::v(); } };\n'
+            printf 'template<> struct F<0> { static long long v() { return 1; } };\n'
+            printf 'long long unit%d() { return F<20>::v(); }\n' "$i"
+        } > "src/unit$i.cpp"
+    done
+    printf 'int main(void) { return 0; }\n' > src/main.cpp
+    cat > CMakeLists.txt <<'EOF'
+cmake_minimum_required(VERSION 3.28)
+project(interrupt CXX)
+file(GLOB sources src/*.cpp)
+add_executable(interrupt ${sources})
+EOF
+    export PATH="$CORK_ROOT/toolchains/current/bin/x64:$PATH"
+    cmake -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE="$toolchain" \
+          -DCMAKE_BUILD_TYPE=Debug > /dev/null || return 1
+
+    local before after key
+    key="interrupt-$$"
+    before="$(cork_wine_processes)"
+
+    # Своя группа процессов, чтобы Ctrl-C пришёл всей сборке разом, как в
+    # терминале, а не одному только cork.
+    setsid "$CORK_BIN" run --session "$key" -- cmake --build build > build.log 2>&1 &
+    local pid=$!
+    # Ждём, пока сборка действительно начнётся: прервать то, что ещё не
+    # запустилось, ничего не проверяет.
+    local waited=0
+    while [ "$waited" -lt 60 ]; do
+        grep -q 'Building CXX object' build.log 2>/dev/null && break
+        sleep 0.5; waited=$((waited + 1))
+    done
+    grep -q 'Building CXX object' build.log 2>/dev/null || { echo "build never started"; cat build.log; kill -9 "$pid" 2>/dev/null; return 1; }
+    sleep 1
+
+    kill -INT -"$pid" 2>/dev/null
+    wait "$pid" 2>/dev/null
+    local rc=$?
+    echo "build exited with $rc after SIGINT"
+
+    # Гасить некому и незачем: `cork run` обязан убрать за собой сам. Пауза —
+    # на завершение процессов, а не на второй шанс.
+    sleep 3
+    after="$(cork_wine_processes)"
+    echo "wine processes: $before before, $after after"
+
+    local left=0
+    [ -d "$CORK_ROOT/sessions/$key" ] && left=1
+    if [ "$after" -gt "$before" ] || [ "$left" = 1 ]; then
+        echo "session directory left: $left"
+        ps -eo args= | grep "^$CORK_ROOT/" | head -5
+        return 1
+    fi
+    NOTE="interrupted mid-build, no processes or session left"
 }
 
 case_offline() {
