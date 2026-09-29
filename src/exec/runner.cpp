@@ -334,8 +334,8 @@ struct Pipe {
 // держится в буфере до следующего куска.
 class LineWriter {
 public:
-    LineWriter(int out_fd, LineFilter filter, const FilterConfig &cfg)
-        : out_fd_(out_fd), filter_(filter), cfg_(cfg) {}
+    LineWriter(int out_fd, LineFilter filter, const FilterConfig &cfg, bool drop_wine_noise)
+        : out_fd_(out_fd), filter_(filter), cfg_(cfg), drop_wine_noise_(drop_wine_noise) {}
 
     void feed(std::string_view chunk) {
         buffer_ += chunk;
@@ -363,6 +363,9 @@ public:
 private:
     void emit(std::string_view line) {
         std::string text = strip_cr(line);
+        if (drop_wine_noise_ && is_wine_diagnostic(text)) {
+            return;
+        }
         if (filter_ != nullptr) {
             text = filter_(text, cfg_);
         }
@@ -383,6 +386,7 @@ private:
     int out_fd_;
     LineFilter filter_;
     FilterConfig cfg_;
+    bool drop_wine_noise_;
     std::string buffer_;
 };
 
@@ -726,8 +730,30 @@ int run_tool(std::string_view tool, const std::vector<std::string> &args,
     err_pipe.close_write();
 
     const FilterConfig filter_cfg;
-    LineWriter out_writer(STDOUT_FILENO, filter_for(spec->name, false), filter_cfg);
-    LineWriter err_writer(STDERR_FILENO, filter_for(spec->name, true), filter_cfg);
+    // Диагностика самого Wine убирается, пока человек не попросил её сам.
+    //
+    // Без этого при падении собранной программы поверх осмысленного отчёта
+    // с именами функций и номерами строк идут две строки про отсутствующий
+    // графический драйвер — Wine пытается открыть окно отладчика — и
+    // несколько fixme из dbghelp. Читают их первыми, а они не про
+    // упавшую программу.
+    //
+    // WINEDEBUG в окружении означает «я разбираюсь с самим Wine»: тогда не
+    // убирается ничего.
+    const bool quiet_wine = std::getenv("WINEDEBUG") == nullptr;
+    // У инструмента без своего фильтра stderr всё равно проходит через
+    // разбор отчёта о падении: упасть может и link, и mt, и тогда путь в
+    // трассировке должен открываться в редакторе, а не быть «Z:\home\...».
+    //
+    // Собранной программы это не касается вовсе: у неё raw_output, конвейеров
+    // нет и фильтровать нечего. Так и задумано — она может быть
+    // интерактивной, и подменять ей потоки ради косметики нельзя.
+    LineFilter err_filter = filter_for(spec->name, true);
+    if (err_filter == nullptr) {
+        err_filter = &crash_report_filter;
+    }
+    LineWriter out_writer(STDOUT_FILENO, filter_for(spec->name, false), filter_cfg, quiet_wine);
+    LineWriter err_writer(STDERR_FILENO, err_filter, filter_cfg, quiet_wine);
 
     bool child_exited = false;
     int child_status = 0;

@@ -133,6 +133,45 @@ std::string dumpbin_stdout_filter(std::string_view line, const FilterConfig &cfg
     return std::string(line);
 }
 
+std::string crash_report_filter(std::string_view line, const FilterConfig &cfg) {
+    // Признак узкий нарочно: «[z:\» или «[Z:\» внутри строки. Так выглядит
+    // кадр трассировки и строка с местом падения, и почти ничто другое.
+    const char lower = static_cast<char>(std::tolower(static_cast<unsigned char>(cfg.root_drive)));
+    const char upper = static_cast<char>(std::toupper(static_cast<unsigned char>(cfg.root_drive)));
+    const std::string marks[] = {std::string("[") + lower + ":\\",
+                                 std::string("[") + upper + ":\\"};
+    for (const auto &mark : marks) {
+        if (line.find(mark) != std::string_view::npos) {
+            return backslashes_to_slashes(strip_root_drive(line, cfg));
+        }
+    }
+    return std::string(line);
+}
+
+bool is_wine_diagnostic(std::string_view line) {
+    // «wine: » — то, что печатает загрузчик до того, как заведёт нумерацию
+    // потоков: «wine: Unhandled page fault...», «wine: cannot find ...».
+    if (line.starts_with("wine: ")) {
+        return true;
+    }
+    // Иначе: шестнадцатеричный идентификатор потока, двоеточие, уровень,
+    // двоеточие. Меньше двух двоеточий — точно не он.
+    std::size_t i = 0;
+    while (i < line.size() && std::isxdigit(static_cast<unsigned char>(line[i])) != 0) {
+        ++i;
+    }
+    if (i == 0 || i >= line.size() || line[i] != ':') {
+        return false;
+    }
+    const std::string_view rest = line.substr(i + 1);
+    for (const std::string_view level : {"err:", "fixme:", "warn:", "trace:"}) {
+        if (rest.starts_with(level)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 LineFilter filter_for(std::string_view tool, bool stderr_stream) {
     if (tool == "cl") {
         return stderr_stream ? &cl_stderr_filter : &cl_stdout_filter;

@@ -35,6 +35,30 @@ std::string cl_stderr_filter(std::string_view line, const FilterConfig & = {});
 // dumpbin печатает путь в «Dump of file» и «PDB file found at».
 std::string dumpbin_stdout_filter(std::string_view line, const FilterConfig & = {});
 
+// Диагностика самого Wine, а не программы: «0220:err:winediag:...»,
+// «0220:fixme:dbghelp:...», «wine: Unhandled page fault...».
+//
+// Отличать её от вывода программы нужно затем, что при падении собранной
+// программы Wine печатает поверх полезного отчёта две строки про
+// отсутствующий графический драйвер (он пытается открыть окно отладчика) и
+// несколько fixme из dbghelp. Человек, у которого упала его программа,
+// читает первым делом их, а они не про него.
+//
+// Признак — префикс «<hex>:<уровень>:» в начале строки: его ставит сам Wine,
+// и подделать его выводом программы можно только нарочно.
+[[nodiscard]] bool is_wine_diagnostic(std::string_view line);
+
+// Отчёт winedbg о падении: строки трассировки вида
+// «=>0 0x... inner+0xa() [Z:\home\...\boom.c:2] in boom (...)».
+//
+// Фильтруется отдельно от вывода программы и по узкому признаку — скобке с
+// путём вида «[<буква>:\». Вывод чужой программы трогать нельзя: она может
+// печатать что угодно, и формат её сообщений нам неизвестен. А вот отчёт о
+// падении печатает Wine, и путь в нём обязан быть тем, по которому редактор
+// откроет файл: иначе символы в трассировке есть, а перейти к строке
+// нельзя.
+std::string crash_report_filter(std::string_view line, const FilterConfig & = {});
+
 // Возвращает фильтр по имени инструмента; nullptr — вывод не трогать.
 using LineFilter = std::string (*)(std::string_view, const FilterConfig &);
 LineFilter filter_for(std::string_view tool, bool stderr_stream);

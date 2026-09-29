@@ -39,6 +39,8 @@ CASES=(
     hello-c             "cl hello.c with stdio, run it, check the exit code"
     hello-cpp           "C++ with iostream, Debug and Release"
     static-lib          "lib.exe makes an archive, link.exe consumes it"
+    shared-lib          "a DLL with an import library, loaded at run time"
+    pch                 "precompiled headers: /Yc makes one, /Yu uses it"
     resources           "rc.exe compiles a .rc, link.exe embeds it"
     manifest            "mt.exe embeds a manifest into a linked binary"
     response-file       "@rsp in UTF-16LE, with a path that has a space"
@@ -283,6 +285,55 @@ EOF
     echo "$out"
     expect_contains "$out" "sum=42" || return 1
     NOTE="archive built and linked against"
+}
+
+case_shared_lib() {
+    workdir shared-lib
+    cat > lib.c <<'EOF'
+#include <stdio.h>
+__declspec(dllexport) int greet(int n) { printf("from dll: %d\n", n); return n * 2; }
+EOF
+    cat > app.c <<'EOF'
+#include <stdio.h>
+__declspec(dllimport) int greet(int n);
+int main(void) { printf("sum=%d\n", greet(21)); return 0; }
+EOF
+    export PATH="$CORK_ROOT/toolchains/current/bin/x64:$PATH"
+    cl /nologo /LD lib.c /Felib.dll > lib.log 2>&1 || { cat lib.log; return 1; }
+    # Импорт-библиотека — половина дела: без неё потребитель не слинкуется, а
+    # без самой DLL рядом не запустится. Проверяется и то, и другое.
+    [ -f lib.dll ] && [ -f lib.lib ] || { echo "no lib.dll or lib.lib"; return 1; }
+    cl /nologo app.c lib.lib /Feapp.exe > app.log 2>&1 || { cat app.log; return 1; }
+    local out
+    out="$("$CORK_BIN" run -- ./app.exe 2>&1)" || { echo "$out"; return 1; }
+    echo "$out"
+    expect_contains "$out" "from dll: 21" || return 1
+    expect_contains "$out" "sum=42" || return 1
+    NOTE="DLL built, linked against and loaded at run time"
+}
+
+case_pch() {
+    workdir pch
+    cat > pch.h <<'EOF'
+#include <stdio.h>
+#include <windows.h>
+EOF
+    printf '#include "pch.h"\n' > pch.c
+    cat > main.c <<'EOF'
+#include "pch.h"
+int main(void) { printf("pch ok\n"); return 0; }
+EOF
+    export PATH="$CORK_ROOT/toolchains/current/bin/x64:$PATH"
+    # /Fp задаёт путь к .pch, и именно на таких ключах ломается трансляция
+    # путей: файл создаёт один вызов компилятора, а читает другой.
+    cl /nologo /Ycpch.h /Fppch.pch /c pch.c > make.log 2>&1 || { cat make.log; return 1; }
+    [ -s pch.pch ] || { echo "no pch.pch produced"; return 1; }
+    cl /nologo /Yupch.h /Fppch.pch main.c pch.obj /Feapp.exe > use.log 2>&1 || { cat use.log; return 1; }
+    local out
+    out="$("$CORK_BIN" run -- ./app.exe 2>&1)" || { echo "$out"; return 1; }
+    echo "$out"
+    expect_contains "$out" "pch ok" || return 1
+    NOTE="/Yc produced $(du -h pch.pch | cut -f1), /Yu consumed it"
 }
 
 case_resources() {

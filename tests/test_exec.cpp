@@ -31,7 +31,50 @@ std::string indices_of(std::string_view tool, const std::vector<std::string> &ar
 
 } // namespace
 
+void test_wine_noise_is_told_from_program_output() {
+    using cork::exec::is_wine_diagnostic;
+
+    // То, что печатает сам Wine. Префикс «<hex потока>:<уровень>:» ставит он
+    // и только он.
+    CHECK(is_wine_diagnostic("021c:err:winediag:nodrv_CreateWindow Application tried"));
+    CHECK(is_wine_diagnostic("0220:fixme:dbghelp:elf_search_auxv can't find symbol"));
+    CHECK(is_wine_diagnostic("0048:warn:module:something"));
+    CHECK(is_wine_diagnostic("wine: Unhandled page fault on read access to 0000000000000000"));
+
+    // То, что печатает программа или компилятор. Спутать нельзя: ни одна из
+    // этих строк не должна пропасть из вывода.
+    CHECK(!is_wine_diagnostic("main.c(3): error C2065: 'x': undeclared identifier"));
+    CHECK(!is_wine_diagnostic("Note: including file: /usr/include/stdio.h"));
+    CHECK(!is_wine_diagnostic("err:something without a thread id"));
+    CHECK(!is_wine_diagnostic("0220 err: not the right shape"));
+    CHECK(!is_wine_diagnostic("deadbeef:this:is:not:a:level"));
+    CHECK(!is_wine_diagnostic(""));
+    // Вывод программы, начинающийся с шестнадцатеричного числа и двоеточия,
+    // но без уровня Wine, остаётся на месте: так печатают дампы и таблицы.
+    CHECK(!is_wine_diagnostic("00401000: 48 89 5c 24 08"));
+}
+
+void test_crash_report_paths_become_unix() {
+    using cork::exec::crash_report_filter;
+
+    // Кадр трассировки winedbg: путь в скобках должен открываться в
+    // редакторе, иначе символы есть, а перейти к строке нельзя.
+    const std::string frame =
+        "=>0 0x0000014000720a inner+0xa(p=0x0) [Z:\\home\\me\\boom.c:2] in boom (0000)";
+    const std::string fixed = crash_report_filter(frame);
+    CHECK(fixed.find("[/home/me/boom.c:2]") != std::string::npos);
+    CHECK(fixed.find("Z:") == std::string::npos);
+
+    // Всё остальное не трогается: формат сообщений чужой программы нам
+    // неизвестен, и переписывать в нём что попало нельзя.
+    CHECK_EQ(crash_report_filter("plain program output"), "plain program output");
+    CHECK_EQ(crash_report_filter("drive Z: mentioned but no bracket"),
+             "drive Z: mentioned but no bracket");
+}
+
 int main() {
+    test_wine_noise_is_told_from_program_output();
+    test_crash_report_paths_become_unix();
     // --- таблица инструментов ---
     {
         CHECK(find_tool("cl") != nullptr);
