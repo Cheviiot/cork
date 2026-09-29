@@ -2,7 +2,9 @@
 #include <cctype>
 #include <cstdlib>
 #include <mutex>
+#include <optional>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -182,6 +184,51 @@ struct Args {
 // имя через все промежуточные функции ради одного слова дороже, чем оно
 // стоит. Безопасно потому, что за один запуск выполняется ровно одна команда.
 std::string_view g_self = "cork download";
+
+// Переносит содержимое from внутрь into, перезаписывая совпадающие файлы.
+//
+// Перенос, а не копирование: оба каталога лежат в одном staging, то есть на
+// одной файловой системе, и rename стоит правки каталога вместо чтения и
+// записи гигабайтов. Ради этого этап и разделён надвое.
+//
+// Совпадающий путь перезаписывается молча, и это то же самое, что делала
+// последовательная распаковка: пейлоад, распакованный позже, затирал файл
+// предыдущего. Слияние идёт в том же порядке, поэтому результат тот же.
+Result<void> merge_tree(const stdfs::path &from, const stdfs::path &into) {
+    std::error_code ec;
+    if (!fs::is_dir(from)) {
+        return {};
+    }
+    for (const auto &entry : stdfs::directory_iterator(from, ec)) {
+        if (ec) {
+            return err_io(fmt::format("listing {}: {}", from.string(), ec.message()));
+        }
+        const stdfs::path target = into / entry.path().filename();
+        const bool is_dir = entry.is_directory(ec) && !entry.is_symlink(ec);
+        if (is_dir) {
+            if (auto r = fs::mkdir_p(target); !r.has_value()) {
+                return r;
+            }
+            if (auto r = merge_tree(entry.path(), target); !r.has_value()) {
+                return r;
+            }
+            continue;
+        }
+        // rename не заменяет каталог файлом и наоборот, поэтому мешающее
+        // убирается явно. Случай редкий, но молча пройти мимо него нельзя:
+        // получилось бы дерево, в котором нет файла, который должен быть.
+        if (fs::exists_no_follow(target)) {
+            stdfs::remove_all(target, ec);
+            ec.clear();
+        }
+        stdfs::rename(entry.path(), target, ec);
+        if (ec) {
+            return err_io(fmt::format("moving {} into place: {}", entry.path().string(),
+                                      ec.message()));
+        }
+    }
+    return {};
+}
 
 bool take_value(const std::vector<std::string> &args, std::size_t &i, std::string &out) {
     if (i + 1 >= args.size()) {
@@ -483,8 +530,33 @@ int download_command(const std::vector<std::string> &raw_args, bool chained) {
         return 1;
     }
 
-    std::size_t unpacked = 0;
-    std::size_t msi_files = 0;
+    // Распаковка идёт в два этапа, и второй из них последовательный не по
+    // недосмотру.
+    //
+    // Она упирается в процессор: 220 секунд при загрузке одного ядра из
+    // шестнадцати, и это самое долгое, что видит человек за всю установку.
+    // Распараллелить её просится само собой, но пейлоады пишут в одно
+    // дерево, и семнадцать путей из тринадцати тысяч пишутся дважды —
+    // проверено обходом хранилища. При параллельной записи победитель в этих
+    // семнадцати случаях определялся бы гонкой, а вместе с ним и дайджест
+    // дерева, то есть имя поколения перестало бы быть воспроизводимым.
+    //
+    // Поэтому каждый пейлоад распаковывается в свой каталог (параллельно), а
+    // затем содержимое переносится в общее дерево по порядку плана
+    // (последовательно). Порядок слияния тот же, что был у
+    // последовательной распаковки, значит результат побайтово тот же.
+    // Перенос — это rename в пределах одной файловой системы, то есть правка
+    // каталогов, а не копирование данных.
+    struct UnpackTask {
+        enum class Kind { Zip, Msi } kind = Kind::Zip;
+        stdfs::path archive;
+        std::string package_id;
+        std::string payload_name;
+        // Соседние файлы установщика; у zip пуст.
+        std::unordered_map<std::string, stdfs::path> side;
+    };
+
+    std::vector<UnpackTask> tasks;
     for (const auto *p : plan->packages) {
         if (p->type == "Vsix") {
             for (const auto &payload : p->payloads) {
@@ -496,19 +568,8 @@ int download_command(const std::vector<std::string> &raw_args, bool chained) {
                     fmt::print(stderr, "{}: {}\n", g_self, blob.error().to_string());
                     return 1;
                 }
-                // Содержимое VSIX лежит под Contents/, остальное — метаданные
-                // пакета, которые нам не нужны.
-                archive::ZipOptions zo;
-                zo.strip_prefix = "Contents/";
-                auto stats = archive::extract_zip(*blob, unpack, zo);
-                if (!stats.has_value()) {
-                    fmt::print(stderr, "{}: unpacking {}: {}\n", g_self, p->id,
-                               stats.error().to_string());
-                    return 1;
-                }
-                receipt.unpacked.push_back(setup::UnpackRecord{
-                    p->id, payload.base_name(), "zip", stats->files + stats->symlinks});
-                ++unpacked;
+                tasks.push_back(
+                    UnpackTask{UnpackTask::Kind::Zip, *blob, p->id, payload.base_name(), {}});
             }
             continue;
         }
@@ -549,32 +610,129 @@ int download_command(const std::vector<std::string> &raw_args, bool chained) {
                 }
             }
         }
-
-        if (installers.empty()) {
-            continue;
-        }
         for (const auto *payload : installers) {
-            archive::MsiExtractOptions mo;
-            mo.locate = [&side](std::string_view name) -> Result<stdfs::path> {
-                auto it = side.find(std::string(name));
-                if (it == side.end()) {
-                    return err_not_found(
-                        fmt::format("'{}' is not among the payloads of this package", name));
-                }
-                return it->second;
-            };
-            auto stats = archive::extract_msi(side.at(payload->base_name()), unpack, mo);
-            if (!stats.has_value()) {
-                fmt::print(stderr, "{}: unpacking {}: {}\n", g_self, p->id,
-                           stats.error().to_string());
-                return 1;
-            }
-            receipt.unpacked.push_back(
-                setup::UnpackRecord{p->id, payload->base_name(), "msi", stats->files});
-            msi_files += stats->files;
-            ++unpacked;
+            tasks.push_back(UnpackTask{UnpackTask::Kind::Msi, side.at(payload->base_name()), p->id,
+                                       payload->base_name(), side});
         }
     }
+
+    const stdfs::path parts = dest / "unpack-parts";
+    std::error_code parts_ec;
+    stdfs::remove_all(parts, parts_ec);
+    if (auto r = fs::mkdir_p(parts); !r.has_value()) {
+        fmt::print(stderr, "{}: {}\n", g_self, r.error().to_string());
+        return 1;
+    }
+
+    std::vector<setup::UnpackRecord> records(tasks.size());
+    std::vector<std::uint64_t> msi_counts(tasks.size(), 0);
+    std::atomic<std::size_t> next_task{0};
+    std::atomic<bool> stop_unpacking{false};
+    std::mutex unpack_error_mutex;
+    std::optional<Error> unpack_error;
+    std::string unpack_error_package;
+
+    const auto unpack_worker = [&] {
+        for (;;) {
+            if (stop_unpacking.load()) {
+                return;
+            }
+            const std::size_t i = next_task.fetch_add(1);
+            if (i >= tasks.size()) {
+                return;
+            }
+            const UnpackTask &task = tasks[i];
+            const stdfs::path into = parts / std::to_string(i);
+            if (auto r = fs::mkdir_p(into); !r.has_value()) {
+                std::lock_guard<std::mutex> guard(unpack_error_mutex);
+                if (!unpack_error.has_value()) {
+                    unpack_error = r.error();
+                    unpack_error_package = task.package_id;
+                }
+                stop_unpacking.store(true);
+                return;
+            }
+
+            Result<void> failure = {};
+            if (task.kind == UnpackTask::Kind::Zip) {
+                // Содержимое VSIX лежит под Contents/, остальное — метаданные
+                // пакета, которые нам не нужны.
+                archive::ZipOptions zo;
+                zo.strip_prefix = "Contents/";
+                auto stats = archive::extract_zip(task.archive, into, zo);
+                if (stats.has_value()) {
+                    records[i] = setup::UnpackRecord{task.package_id, task.payload_name, "zip",
+                                                     stats->files + stats->symlinks};
+                } else {
+                    failure = std::unexpected(std::move(stats).error());
+                }
+            } else {
+                archive::MsiExtractOptions mo;
+                mo.locate = [&task](std::string_view name) -> Result<stdfs::path> {
+                    auto it = task.side.find(std::string(name));
+                    if (it == task.side.end()) {
+                        return err_not_found(fmt::format(
+                            "'{}' is not among the payloads of this package", name));
+                    }
+                    return it->second;
+                };
+                auto stats = archive::extract_msi(task.archive, into, mo);
+                if (stats.has_value()) {
+                    records[i] = setup::UnpackRecord{task.package_id, task.payload_name, "msi",
+                                                     stats->files};
+                    msi_counts[i] = stats->files;
+                } else {
+                    failure = std::unexpected(std::move(stats).error());
+                }
+            }
+
+            if (!failure.has_value()) {
+                std::lock_guard<std::mutex> guard(unpack_error_mutex);
+                // Первая по порядку задач, а не первая по времени: иначе
+                // одна и та же поломка называла бы разные пакеты от прогона
+                // к прогону.
+                if (!unpack_error.has_value()) {
+                    unpack_error = failure.error();
+                    unpack_error_package = task.package_id;
+                }
+                stop_unpacking.store(true);
+                return;
+            }
+        }
+    };
+
+    {
+        const unsigned cores = std::max(1u, std::thread::hardware_concurrency());
+        const std::size_t workers = std::min<std::size_t>(cores, std::max<std::size_t>(tasks.size(), 1));
+        std::vector<std::thread> pool;
+        pool.reserve(workers);
+        for (std::size_t i = 0; i < workers; ++i) {
+            pool.emplace_back(unpack_worker);
+        }
+        for (auto &t : pool) {
+            t.join();
+        }
+    }
+
+    if (unpack_error.has_value()) {
+        fmt::print(stderr, "{}: unpacking {}: {}\n", g_self, unpack_error_package,
+                   unpack_error->to_string());
+        return 1;
+    }
+
+    std::size_t unpacked = 0;
+    std::size_t msi_files = 0;
+    for (std::size_t i = 0; i < tasks.size(); ++i) {
+        if (auto r = merge_tree(parts / std::to_string(i), unpack); !r.has_value()) {
+            fmt::print(stderr, "{}: {}\n", g_self, r.error().to_string());
+            return 1;
+        }
+        receipt.unpacked.push_back(records[i]);
+        msi_files += msi_counts[i];
+        ++unpacked;
+    }
+    stdfs::remove_all(parts, parts_ec);
+
     i18n::say(i18n::Msg::UnpackedInto, unpacked,
                msi_files, unpack.string());
 
