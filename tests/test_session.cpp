@@ -104,6 +104,72 @@ void test_clone_preserves_what_matters() {
     CHECK(stdfs::is_directory(to / "empty", ec));
 }
 
+// Клонирование там, где reflink недоступен.
+//
+// Единственный проверяемый здесь путь — запасной: на btrfs, где идёт вся
+// остальная разработка, FICLONE срабатывает всегда, и ветка copy_file_range
+// с read/write не выполняется ни разу. Между тем именно она достаётся
+// пользователю на ext4, и цена ошибки в ней — полгигабайта на каждую сборку
+// или испорченный префикс.
+//
+// Файловая система без reflink берётся из /dev/shm: это tmpfs, FICLONE она
+// не умеет по устройству. Правило «ничего временного в /tmp» здесь не
+// нарушается — каталог свой, файлы крошечные, и убираются сразу; иначе эту
+// ветку проверить нечем.
+void test_clone_without_reflink() {
+    const stdfs::path shm = "/dev/shm";
+    std::error_code ec;
+    if (!stdfs::is_directory(shm, ec)) {
+        return;  // негде проверить; молча пропускаем
+    }
+    const stdfs::path work = shm / ("cork-clone-" + std::to_string(::getpid()));
+    stdfs::remove_all(work, ec);
+    if (!stdfs::create_directories(work, ec)) {
+        return;
+    }
+    struct Cleanup {
+        stdfs::path dir;
+        ~Cleanup() {
+            std::error_code e;
+            stdfs::remove_all(dir, e);
+        }
+    } cleanup{work};
+
+    // Если вдруг reflink здесь есть, проверять нечего: тест ничего не
+    // подтвердит, и делать вид, что подтвердил, нельзя.
+    if (fs::supports_reflink(work)) {
+        return;
+    }
+
+    const stdfs::path from = work / "src";
+    const stdfs::path to = work / "dst";
+    write_file(from / "plain.txt", "hello");
+    write_file(from / "bin" / "tool", "#!/bin/sh\n");
+    stdfs::permissions(from / "bin" / "tool",
+                       stdfs::perms::owner_all | stdfs::perms::group_read |
+                           stdfs::perms::group_exec);
+    stdfs::create_symlink("plain.txt", from / "link.txt", ec);
+    CHECK(!ec);
+
+    auto stats = fs::clone_tree(from, to);
+    CHECK(stats.has_value());
+    if (!stats) {
+        return;
+    }
+    // Способ обязан быть не reflink: иначе тест проверяет не ту ветку.
+    CHECK(stats->method != fs::CloneMethod::Reflink);
+
+    // Дальше требования те же, что и на btrfs: дерево должно получиться
+    // неотличимым. Медленнее — да, хуже — нет.
+    CHECK_EQ(read_file(to / "plain.txt"), std::string("hello"));
+    CHECK(stdfs::is_symlink(to / "link.txt", ec));
+    CHECK_EQ(stdfs::read_symlink(to / "link.txt", ec).string(), std::string("plain.txt"));
+    const auto perms = stdfs::status(to / "bin" / "tool", ec).permissions();
+    CHECK((perms & stdfs::perms::owner_exec) != stdfs::perms::none);
+    CHECK(stdfs::last_write_time(to / "plain.txt", ec) ==
+          stdfs::last_write_time(from / "plain.txt", ec));
+}
+
 void test_clone_refuses_to_merge() {
     Sandbox box;
     const stdfs::path from = box.path() / "src";
@@ -342,6 +408,7 @@ void test_template_has_the_directories_a_build_needs() {
 int main() {
     test_template_has_the_directories_a_build_needs();
     test_clone_preserves_what_matters();
+    test_clone_without_reflink();
     test_clone_refuses_to_merge();
     test_session_key_follows_the_build_root();
     test_cmake_probes_share_the_parent_session();
