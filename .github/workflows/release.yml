@@ -128,7 +128,12 @@ jobs:
           name="cork-${version}-linux-x86_64"
           mkdir -p "dist/$name"
           cp build/linux-release/cork "dist/$name/"
-          cp README.md LICENSE.txt "dist/$name/"
+          cp LICENSE.txt "dist/$name/"
+          # Все README, какие есть, а не только английский: их число со
+          # временем меняется, и список, выписанный руками, отстанет молча.
+          for doc in README*.md; do
+            [ -e "$doc" ] && cp "$doc" "dist/$name/"
+          done
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           (cd dist && sha256sum "$name.tar.gz" | tee SHA256SUMS)
           echo "name=$name" >> "$GITHUB_OUTPUT"
