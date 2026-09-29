@@ -10,7 +10,6 @@
     "fmt",
     "simdjson",
     "libzip",
-    "zstd",
     "libmspack",
     {
       "name": "curl",
