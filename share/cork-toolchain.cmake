@@ -15,6 +15,18 @@ if(NOT DEFINED CORK_TARGET)
     set(CORK_TARGET "x64")
 endif()
 
+# Триплет принимается наравне с коротким именем. Человек, пришедший из clang,
+# rust или vcpkg, напишет привычное «x86_64-pc-windows-msvc», и отвечать ему
+# «нет такой цели» было бы неправдой: цель есть, не совпало написание.
+string(TOLOWER "${CORK_TARGET}" _cork_target_lower)
+if(_cork_target_lower MATCHES "^(x86_64|amd64)($|-)" OR _cork_target_lower STREQUAL "win64")
+    set(CORK_TARGET "x64")
+elseif(_cork_target_lower MATCHES "^(i686|i386)($|-)" OR _cork_target_lower STREQUAL "win32")
+    set(CORK_TARGET "x86")
+elseif(_cork_target_lower MATCHES "^(aarch64|arm64)($|-)")
+    set(CORK_TARGET "arm64")
+endif()
+
 set(CMAKE_SYSTEM_NAME Windows)
 set(CMAKE_SYSTEM_VERSION 10.0)
 
@@ -45,6 +57,18 @@ find_program(CMAKE_MT           NAMES mt   REQUIRED)
 # link and run that probe, because the result is a Windows binary: so the
 # check is told to stop at the static library.
 set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+
+# Собранное можно запустить, и CMake должен об этом знать.
+#
+# Без этой строки кросс-сборка остаётся односторонней: `ctest` не запускает ни
+# одного теста, а `add_custom_command`, который прогоняет только что собранный
+# генератор, падает на «не тот формат». Между «умеет собирать» и «им можно
+# пользоваться» стоит именно она.
+#
+# `cork run --` заводит сессии префикс и убирает его за собой, поэтому
+# параллельный ctest не мешает сам себе.
+find_program(CORK_COMMAND NAMES cork REQUIRED)
+set(CMAKE_CROSSCOMPILING_EMULATOR "${CORK_COMMAND}" run --)
 
 # Look for libraries and headers inside the toolchain, never on the Linux host.
 # Without this, find_library cheerfully hands a Windows build /usr/lib/libz.so

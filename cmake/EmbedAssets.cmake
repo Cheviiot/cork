@@ -116,3 +116,40 @@ inline std::span<const std::byte> runtime_pins() {
 ")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${source}")
 endfunction()
+
+# Файлы для чужих сборочных систем: триплет vcpkg и cross-файл Meson. Оба —
+# шаблоны с подстановками, которые install заполняет путями этой установки.
+function(cork_generate_embedded_integration output_file)
+    set(vcpkg "${CMAKE_SOURCE_DIR}/share/cork-vcpkg-triplet.cmake")
+    set(meson "${CMAKE_SOURCE_DIR}/share/cork-meson-cross.ini")
+    file(WRITE "${output_file}"
+"// Создаётся CMake, не редактировать.
+#pragma once
+
+#include <cstddef>
+#include <span>
+
+namespace cork::assets {
+
+inline constexpr unsigned char kVcpkgTripletBytes[] = {
+#embed \"${vcpkg}\"
+};
+
+inline constexpr unsigned char kMesonCrossBytes[] = {
+#embed \"${meson}\"
+};
+
+inline std::span<const std::byte> vcpkg_triplet() {
+    return std::span<const std::byte>(
+        reinterpret_cast<const std::byte *>(kVcpkgTripletBytes), sizeof kVcpkgTripletBytes);
+}
+
+inline std::span<const std::byte> meson_cross() {
+    return std::span<const std::byte>(
+        reinterpret_cast<const std::byte *>(kMesonCrossBytes), sizeof kMesonCrossBytes);
+}
+
+} // namespace cork::assets
+")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${vcpkg}" "${meson}")
+endfunction()

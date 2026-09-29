@@ -21,6 +21,7 @@
 #include "manifest/parse.hpp"
 #include "net/http.hpp"
 #include "resolve/resolve.hpp"
+#include "setup/config.hpp"
 #include "setup/generation.hpp"
 #include "setup/runtime.hpp"
 #include "setup/receipt.hpp"
@@ -174,9 +175,17 @@ struct Args {
     int jobs = 5;
 };
 
+// Имя в сообщениях — то, что набрал человек. «cork download: unknown option»
+// в ответ на `cork setup` заставляет искать команду, которую не вызывали.
+//
+// Глобальная переменная, а не параметр: этих сообщений два десятка, и тащить
+// имя через все промежуточные функции ради одного слова дороже, чем оно
+// стоит. Безопасно потому, что за один запуск выполняется ровно одна команда.
+std::string_view g_self = "cork download";
+
 bool take_value(const std::vector<std::string> &args, std::size_t &i, std::string &out) {
     if (i + 1 >= args.size()) {
-        fmt::print(stderr, "cork download: {} needs a value\n", args[i]);
+        fmt::print(stderr, "{}: {} needs a value\n", g_self, args[i]);
         return false;
     }
     out = args[++i];
@@ -185,7 +194,10 @@ bool take_value(const std::vector<std::string> &args, std::size_t &i, std::strin
 
 } // namespace
 
-int cmd_download(const std::vector<std::string> &raw_args) {
+// Имя в сообщениях — то, что набрал человек. «cork download: unknown option»
+// в ответ на `cork setup` заставляет искать команду, которую не вызывали.
+int download_command(const std::vector<std::string> &raw_args, bool chained) {
+    g_self = chained ? "cork setup" : "cork download";
     Args a;
 
     for (std::size_t i = 0; i < raw_args.size(); ++i) {
@@ -222,6 +234,12 @@ int cmd_download(const std::vector<std::string> &raw_args) {
             a.sdk_version = value;
         } else if (arg == "--architecture") {
             if (!take_value(raw_args, i, value)) return 2;
+            // Триплет принимается наравне с коротким именем: см.
+            // setup::normalise_target. Непонятное написание уходит дальше как
+            // есть — пусть о нём скажет тот, кто знает список целей.
+            if (std::string canonical = setup::normalise_target(value); !canonical.empty()) {
+                value = std::move(canonical);
+            }
             a.architectures.push_back(value);
         } else if (arg == "--ignore") {
             if (!take_value(raw_args, i, value)) return 2;
@@ -242,7 +260,7 @@ int cmd_download(const std::vector<std::string> &raw_args) {
         } else if (arg == "-h" || arg == "--help") {
             return cmd_help(0);
         } else if (arg.rfind("--", 0) == 0) {
-            fmt::print(stderr, "cork download: unknown option {}\n", arg);
+            fmt::print(stderr, "{}: unknown option {}\n", g_self, arg);
             return 2;
         } else {
             a.packages.push_back(arg);
@@ -257,7 +275,7 @@ int cmd_download(const std::vector<std::string> &raw_args) {
         a.store_dir = root.store();
     }
     if (auto r = root.ensure(); !r.has_value()) {
-        fmt::print(stderr, "cork download: {}\n", r.error().to_string());
+        fmt::print(stderr, "{}: {}\n", g_self, r.error().to_string());
         return 1;
     }
 
@@ -278,7 +296,7 @@ int cmd_download(const std::vector<std::string> &raw_args) {
         const stdfs::path p = stdfs::absolute(a.manifest_file);
         auto content = fs::read_file(p);
         if (!content.has_value()) {
-            fmt::print(stderr, "cork download: {}\n", content.error().to_string());
+            fmt::print(stderr, "{}: {}\n", g_self, content.error().to_string());
             return 1;
         }
         manifest_json = std::move(*content);
@@ -290,19 +308,19 @@ int cmd_download(const std::vector<std::string> &raw_args) {
         i18n::say(i18n::Msg::FetchingChannel, channel_url);
         auto channel_json = net::get(channel_url);
         if (!channel_json.has_value()) {
-            fmt::print(stderr, "cork download: {}\n", channel_json.error().to_string());
+            fmt::print(stderr, "{}: {}\n", g_self, channel_json.error().to_string());
             return 1;
         }
         auto url = manifest::installer_manifest_url(*channel_json);
         if (!url.has_value()) {
-            fmt::print(stderr, "cork download: {}\n", url.error().to_string());
+            fmt::print(stderr, "{}: {}\n", g_self, url.error().to_string());
             return 1;
         }
         manifest_url = *url;
         i18n::say(i18n::Msg::FetchingManifest);
         auto body = net::get(*url);
         if (!body.has_value()) {
-            fmt::print(stderr, "cork download: {}\n", body.error().to_string());
+            fmt::print(stderr, "{}: {}\n", g_self, body.error().to_string());
             return 1;
         }
         manifest_json = std::move(*body);
@@ -310,7 +328,7 @@ int cmd_download(const std::vector<std::string> &raw_args) {
 
     auto doc = manifest::parse_installer_manifest(manifest_json);
     if (!doc.has_value()) {
-        fmt::print(stderr, "cork download: {}\n", doc.error().to_string());
+        fmt::print(stderr, "{}: {}\n", g_self, doc.error().to_string());
         return 1;
     }
     i18n::say(i18n::Msg::LoadedManifest, doc->product_display_version);
@@ -370,7 +388,7 @@ int cmd_download(const std::vector<std::string> &raw_args) {
 
     auto plan = resolve::resolve_selection(index, opts);
     if (!plan.has_value()) {
-        fmt::print(stderr, "cork download: {}\n", plan.error().to_string());
+        fmt::print(stderr, "{}: {}\n", g_self, plan.error().to_string());
         return 1;
     }
     i18n::say(i18n::Msg::SelectedPackages, plan->packages.size(),
@@ -387,7 +405,7 @@ int cmd_download(const std::vector<std::string> &raw_args) {
     }
     receipt.selection.digest = setup::selection_digest(receipt.selection.package_ids);
     if (auto r = receipt.advance(setup::State::Resolved, kVersion); !r.has_value()) {
-        fmt::print(stderr, "cork download: {}\n", r.error().to_string());
+        fmt::print(stderr, "{}: {}\n", g_self, r.error().to_string());
         return 1;
     }
 
@@ -411,7 +429,7 @@ int cmd_download(const std::vector<std::string> &raw_args) {
     ConsoleProgress progress(requests.size());
     i18n::say(i18n::Msg::DownloadingInto, requests.size(), a.store_dir.string());
     if (auto r = store::fetch_all(artifact_store, requests, a.jobs, progress); !r.has_value()) {
-        fmt::print(stderr, "cork download: {}\n", r.error().to_string());
+        fmt::print(stderr, "{}: {}\n", g_self, r.error().to_string());
         return 1;
     }
 
@@ -425,7 +443,7 @@ int cmd_download(const std::vector<std::string> &raw_args) {
         }
     }
     if (auto r = receipt.advance(setup::State::Fetched, kVersion); !r.has_value()) {
-        fmt::print(stderr, "cork download: {}\n", r.error().to_string());
+        fmt::print(stderr, "{}: {}\n", g_self, r.error().to_string());
         return 1;
     }
 
@@ -444,7 +462,7 @@ int cmd_download(const std::vector<std::string> &raw_args) {
     // сборка мусора его уберёт.
     auto staging = setup::Staging::create(root);
     if (!staging.has_value()) {
-        fmt::print(stderr, "cork download: {}\n", staging.error().to_string());
+        fmt::print(stderr, "{}: {}\n", g_self, staging.error().to_string());
         return 1;
     }
     const stdfs::path dest = staging->path();
@@ -455,13 +473,13 @@ int cmd_download(const std::vector<std::string> &raw_args) {
     auto lock = Lock::acquire(root.locks(), "staging-" + dest.filename().string(),
                               Lock::Mode::Exclusive);
     if (!lock.has_value()) {
-        fmt::print(stderr, "cork download: {}\n", lock.error().to_string());
+        fmt::print(stderr, "{}: {}\n", g_self, lock.error().to_string());
         return 1;
     }
 
     const stdfs::path unpack = dest / "unpack";
     if (auto r = fs::mkdir_p(unpack); !r.has_value()) {
-        fmt::print(stderr, "cork download: {}\n", r.error().to_string());
+        fmt::print(stderr, "{}: {}\n", g_self, r.error().to_string());
         return 1;
     }
 
@@ -475,7 +493,7 @@ int cmd_download(const std::vector<std::string> &raw_args) {
                 }
                 auto blob = artifact_store.path_of(store::BlobId{payload.sha256});
                 if (!blob.has_value()) {
-                    fmt::print(stderr, "cork download: {}\n", blob.error().to_string());
+                    fmt::print(stderr, "{}: {}\n", g_self, blob.error().to_string());
                     return 1;
                 }
                 // Содержимое VSIX лежит под Contents/, остальное — метаданные
@@ -484,7 +502,7 @@ int cmd_download(const std::vector<std::string> &raw_args) {
                 zo.strip_prefix = "Contents/";
                 auto stats = archive::extract_zip(*blob, unpack, zo);
                 if (!stats.has_value()) {
-                    fmt::print(stderr, "cork download: unpacking {}: {}\n", p->id,
+                    fmt::print(stderr, "{}: unpacking {}: {}\n", g_self, p->id,
                                stats.error().to_string());
                     return 1;
                 }
@@ -514,7 +532,7 @@ int cmd_download(const std::vector<std::string> &raw_args) {
             }
             auto blob = artifact_store.path_of(store::BlobId{payload.sha256});
             if (!blob.has_value()) {
-                fmt::print(stderr, "cork download: {}\n", blob.error().to_string());
+                fmt::print(stderr, "{}: {}\n", g_self, blob.error().to_string());
                 return 1;
             }
             std::string name = payload.base_name();
@@ -547,7 +565,7 @@ int cmd_download(const std::vector<std::string> &raw_args) {
             };
             auto stats = archive::extract_msi(side.at(payload->base_name()), unpack, mo);
             if (!stats.has_value()) {
-                fmt::print(stderr, "cork download: unpacking {}: {}\n", p->id,
+                fmt::print(stderr, "{}: unpacking {}: {}\n", g_self, p->id,
                            stats.error().to_string());
                 return 1;
             }
@@ -561,11 +579,11 @@ int cmd_download(const std::vector<std::string> &raw_args) {
                msi_files, unpack.string());
 
     if (auto r = receipt.advance(setup::State::Staged, kVersion); !r.has_value()) {
-        fmt::print(stderr, "cork download: {}\n", r.error().to_string());
+        fmt::print(stderr, "{}: {}\n", g_self, r.error().to_string());
         return 1;
     }
     if (auto r = receipt.save(dest); !r.has_value()) {
-        fmt::print(stderr, "cork download: {}\n", r.error().to_string());
+        fmt::print(stderr, "{}: {}\n", g_self, r.error().to_string());
         return 1;
     }
 
@@ -580,20 +598,68 @@ int cmd_download(const std::vector<std::string> &raw_args) {
         auto installed =
             setup::install_runtime(root, wine_runtime_id(), *pins, artifact_store, progress);
         if (!installed.has_value()) {
-            fmt::print(stderr, "cork download: {}\n", installed.error().to_string());
+            fmt::print(stderr, "{}: {}\n", g_self, installed.error().to_string());
         } else if (!installed->already_present) {
             i18n::say(i18n::Msg::RuntimeInstalled, wine_runtime_id(), installed->files,
                       installed->symlinks);
         }
     } else {
-        fmt::print(stderr, "cork download: {}\n", pins.error().to_string());
+        fmt::print(stderr, "{}: {}\n", g_self, pins.error().to_string());
     }
 
     // Каталог сборки переживает эту команду: его подхватит install. Без
     // keep() деструктор убрал бы результат получасовой распаковки.
     staging->keep();
-    i18n::say(i18n::Msg::NextInstall, dest.string());
+    // Подсказка «дальше сделайте вот это» не печатается, когда это «дальше»
+    // уже происходит: setup зовёт install сам, и совет набрать его руками
+    // сбивал бы с толку ровно того, кто выбрал не набирать команды.
+    if (!chained) {
+        i18n::say(i18n::Msg::NextInstall, dest.string());
+    }
     return 0;
+}
+
+int cmd_download(const std::vector<std::string> &args) {
+    return download_command(args, /*chained=*/false);
+}
+
+// Одна команда на всю установку.
+//
+// Философия простая: человек ставит cork, остальное cork берёт на себя. До
+// этого готовая к сборке установка требовала трёх команд подряд —
+// `download`, `install`, `template`, — и каждая печатала, какую набрать
+// следующей. Список шагов, который надо пройти без ошибок, — это работа,
+// переложенная на того, кто пришёл собирать свой проект, а не изучать наш
+// порядок.
+//
+// Отдельные команды остаются: они нужны, когда что-то пошло не так и надо
+// повторить один шаг, а не всё. Но нормальный путь — этот.
+//
+// Чего cork не берёт на себя: согласия с лицензией Microsoft. Скачивание её
+// пакетов требует принять условия, и принять их за человека нельзя — ни
+// технически, ни по существу. Это единственное, о чём приходится спросить.
+int cmd_setup(const std::vector<std::string> &args) {
+    for (const auto &a : args) {
+        if (a == "-h" || a == "--help") {
+            return cmd_help(0);
+        }
+    }
+
+    if (const int rc = download_command(args, /*chained=*/true); rc != 0) {
+        return rc;
+    }
+
+    // Корень передаётся дальше, остальное — нет: у install свои ключи, и
+    // чужие он не поймёт. Каталог сборки install находит сам, тот самый,
+    // который только что получился.
+    std::vector<std::string> install_args;
+    for (std::size_t i = 0; i + 1 < args.size(); ++i) {
+        if (args[i] == "--root") {
+            install_args.push_back(args[i]);
+            install_args.push_back(args[i + 1]);
+        }
+    }
+    return cmd_install(install_args);
 }
 
 } // namespace cork::cli

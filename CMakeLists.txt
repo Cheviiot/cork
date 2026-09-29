@@ -50,6 +50,7 @@ set(CORK_HELPER "" CACHE FILEPATH "Built cork-helper.exe to embed")
 cork_generate_embedded_helper("${CMAKE_BINARY_DIR}/generated/cork_embedded_helper.h")
 cork_generate_embedded_toolchain("${CMAKE_BINARY_DIR}/generated/cork_embedded_toolchain.h")
 cork_generate_embedded_runtime_pins("${CMAKE_BINARY_DIR}/generated/cork_embedded_runtime_pins.h")
+cork_generate_embedded_integration("${CMAKE_BINARY_DIR}/generated/cork_embedded_integration.h")
 
 # Ревизия снимается на этапе конфигурации, а не сборки. Это значит, что после
 # коммита без переконфигурации строка версии останется прежней — сознательный

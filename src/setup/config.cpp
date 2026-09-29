@@ -1,5 +1,8 @@
 #include "setup/config.hpp"
 
+#include <algorithm>
+#include <cctype>
+
 #include <simdjson.h>
 
 #include <fmt/format.h>
@@ -201,6 +204,33 @@ Result<stdfs::path> find_generation_root(const stdfs::path &start) {
     }
     return err_config("no " + std::string(kConfigFileName) + " found above " + start.string() +
                       "; this installation is incomplete, run `cork install`");
+}
+
+std::string normalise_target(std::string_view spelling) {
+    std::string lower(spelling);
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+    // Триплет опознаётся по началу: всё, что идёт после архитектуры
+    // (vendor, система, abi), для нас ничего не меняет — цель у cork всегда
+    // windows-msvc, другой она быть не может.
+    const auto starts_with = [&lower](std::string_view prefix) {
+        return lower.size() >= prefix.size() && lower.compare(0, prefix.size(), prefix) == 0;
+    };
+
+    if (lower == "x64" || lower == "x86_64" || lower == "amd64" || lower == "win64" ||
+        starts_with("x86_64-") || starts_with("amd64-")) {
+        return "x64";
+    }
+    if (lower == "x86" || lower == "i386" || lower == "i686" || lower == "win32" ||
+        starts_with("i686-") || starts_with("i386-")) {
+        return "x86";
+    }
+    if (lower == "arm64" || lower == "aarch64" || starts_with("aarch64-") ||
+        starts_with("arm64-")) {
+        return "arm64";
+    }
+    return {};
 }
 
 } // namespace cork::setup

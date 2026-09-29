@@ -22,6 +22,12 @@ struct InstallOptions {
     std::filesystem::path self_binary;   // копируется в bin/<arch>
     std::span<const std::byte> helper;   // вшитый cork-helper.exe
     std::span<const std::byte> cmake_toolchain;  // share/cork-toolchain.cmake
+    // Шаблоны для чужих сборочных систем. Подстановки заполняются здесь, а
+    // не в CLI: пути зависят от корня установки и набора целей, и знает их
+    // только тот, кто раскладывает поколение.
+    std::span<const std::byte> vcpkg_triplet;
+    std::span<const std::byte> meson_cross;
+    std::filesystem::path install_root;  // куда показывает toolchains/current
     std::string wine_id;
     std::string version;
     std::string commit;

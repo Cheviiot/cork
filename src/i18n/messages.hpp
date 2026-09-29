@@ -43,6 +43,7 @@ namespace cork::i18n {
     X(Repeatable, "repeatable")                                                                \
                                                                                                \
     /* строки описания команд */                                                               \
+    X(CmdSetup, "install everything needed to build: download, install, prepare")  \
     X(CmdDownload, "fetch Microsoft's packages and unpack them into a build directory")        \
     X(CmdInstall, "check a build directory and publish it as the current toolchain")           \
     X(CmdDoctor, "check that the installation can actually build")                             \
@@ -100,6 +101,7 @@ namespace cork::i18n {
                                                                                                \
     /* ход установки */                                                                        \
     X(Relocating, "Relocating unpacked components\n")                                          \
+    X(CaseAliases, "Added {} lower-case aliases so clang-cl can read the tree\n")  \
     X(UsingMsvc, "Using MSVC {}\n")                                                            \
     X(UsingSdk, "Using Windows SDK {}\n")                                                      \
     X(NoSdkYet, "No Windows SDK installed yet; only headerless compilation will work\n")       \
@@ -132,7 +134,7 @@ namespace cork::i18n {
     /* итог doctor */                                                                          \
     X(ChecksSummary, "\n{} checks, {} failed, {} warnings\n")                                  \
     X(CannotBuild,                                                                             \
-      "This installation cannot build. Re-run `cork download` and `cork install`.\n")          \
+      "This installation cannot build. Re-run `cork setup --accept-license`.\n")             \
     X(DoctorHint,                                                                              \
       "Run `cork doctor --deep` to verify the whole tree against its digest, or\n"             \
       "`cork doctor --build` to compile and link a probe for every target.\n")

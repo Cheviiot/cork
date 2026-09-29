@@ -119,7 +119,7 @@ Result<stdfs::path> resolve_wine(const setup::Config &cfg) {
         // об этом своими словами и предложит собрать.
         return err_not_found(fmt::format(
             "the cork Wine runtime {} is not installed at {}\n"
-            "Run `cork download` to fetch it. A system Wine is not supported.",
+            "Run `cork setup --accept-license` to get it. A system Wine is not supported.",
             cfg.wine_id, wine.string()));
     }
     return wine;
@@ -465,6 +465,9 @@ int run_tool(std::string_view tool, const std::vector<std::string> &args,
         } else {
             arch = cfg->host_arch;
         }
+    }
+    if (std::string canonical = setup::normalise_target(arch); !canonical.empty()) {
+        arch = std::move(canonical);
     }
     if (cfg->targets.count(arch) == 0) {
         fmt::print(stderr, "cork: no target architecture \"{}\" in this installation\n", arch);

@@ -18,6 +18,7 @@
 #include "setup/receipt.hpp"
 #include "setup/relocate.hpp"
 #include "cork_embedded_helper.h"
+#include "cork_embedded_integration.h"
 #include "cork_embedded_toolchain.h"
 
 namespace cork::cli {
@@ -148,6 +149,17 @@ int cmd_install(const std::vector<std::string> &args) {
         return 1;
     }
 
+    // Символьные ссылки строчными именами — до подсчёта дайджеста, потому что
+    // они часть дерева, а не украшение поверх него. Обоснование в
+    // setup/relocate.hpp: без них clang-cl не находит windows.h, и наше
+    // дерево, годное как /winsysroot, для него бесполезно.
+    if (auto r = setup::create_case_aliases(staging_dir); !r.has_value()) {
+        fmt::print(stderr, "cork install: {}\n", r.error().to_string());
+        return 1;
+    } else if (*r > 0) {
+        i18n::say(i18n::Msg::CaseAliases, *r);
+    }
+
     std::error_code ec;
     const stdfs::path self = stdfs::read_symlink("/proc/self/exe", ec);
     if (ec) {
@@ -160,6 +172,9 @@ int cmd_install(const std::vector<std::string> &args) {
     opts.self_binary = self;
     opts.helper = assets::helper();
     opts.cmake_toolchain = assets::cmake_toolchain();
+    opts.vcpkg_triplet = assets::vcpkg_triplet();
+    opts.meson_cross = assets::meson_cross();
+    opts.install_root = root.base;
     opts.wine_id = wine_runtime_id();
     opts.version = kVersion;
     opts.commit = kGitRevision;
@@ -299,6 +314,19 @@ int cmd_install(const std::vector<std::string> &args) {
         i18n::say(i18n::Msg::InstalledWrappers, arch);
     }
     i18n::say(i18n::Msg::PublishedAt, published->string());
+
+    // Шаблон префикса строится здесь же. Раньше это был отдельный шаг, о
+    // котором знал только doctor — предупреждением, которое ничего не
+    // ломало: без шаблона всё работает, просто каждая сборка сначала минуту
+    // поднимает префикс с нуля. Шаг, который можно не сделать и не заметить,
+    // не делают.
+    //
+    // Отказ здесь не отменяет установки: поколение уже опубликовано и
+    // пригодно, шаблон — ускорение, а не условие.
+    if (ensure_prefix_template(root) != 0) {
+        fmt::print(stderr, "cork install: the toolchain is installed, but the prefix template\n"
+                           "              could not be built; builds will be slower.\n");
+    }
     i18n::say(i18n::Msg::AddToPath);
     fmt::print("  export PATH={}/bin/{}:$PATH\n", root.current().string(),
                report->targets.front());

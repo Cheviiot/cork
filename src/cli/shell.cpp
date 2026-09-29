@@ -102,6 +102,12 @@ int cmd_env(const std::vector<std::string> &args) {
     if (arch.empty()) {
         arch = cfg->host_arch;
     }
+    // Написание приводится к нашему: человек, пришедший из clang или rust,
+    // наберёт «x86_64-pc-windows-msvc», и отвечать ему «нет такой цели» было
+    // бы неправдой — цель есть, не совпало написание.
+    if (std::string canonical = setup::normalise_target(arch); !canonical.empty()) {
+        arch = std::move(canonical);
+    }
     if (cfg->targets.find(arch) == cfg->targets.end()) {
         fmt::print(stderr, "cork env: no target '{}' in this installation\n", arch);
         return 1;

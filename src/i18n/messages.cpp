@@ -49,6 +49,8 @@ const Table &russian() {
         set(Msg::HelpHint, "`cork help <команда>` покажет ключи одной команды.");
         set(Msg::Repeatable, "можно повторять");
 
+        set(Msg::CmdSetup,
+            "установить всё нужное для сборки: скачать, установить, подготовить");
         set(Msg::CmdDownload, "скачать пакеты Microsoft и распаковать их в сборочный каталог");
         set(Msg::CmdInstall, "проверить сборочный каталог и опубликовать как текущий тулчейн");
         set(Msg::CmdDoctor, "проверить, что установка действительно способна собирать");
@@ -105,6 +107,8 @@ const Table &russian() {
             "Установлен рантайм Wine {}: файлов {}, символьных ссылок {}\n");
 
         set(Msg::Relocating, "Раскладываю распакованные компоненты\n");
+        set(Msg::CaseAliases,
+            "Добавлено ссылок строчными именами (для clang-cl): {}\n");
         set(Msg::UsingMsvc, "Использую MSVC {}\n");
         set(Msg::UsingSdk, "Использую Windows SDK {}\n");
         
@@ -138,8 +142,8 @@ const Table &russian() {
         set(Msg::CurrentMarker, "текущее");
 
         set(Msg::ChecksSummary, "\nПроверок: {}, неуспешных: {}, предупреждений: {}\n");
-        set(Msg::CannotBuild, "Эта установка не способна собирать. Повторите `cork download` и "
-                              "`cork install`.\n");
+        set(Msg::CannotBuild,
+            "Эта установка не способна собирать. Повторите `cork setup --accept-license`.\n");
         set(Msg::DoctorHint,
             "`cork doctor --deep` сверит всё дерево с его дайджестом, а\n"
             "`cork doctor --build` соберёт и скомпонует пробник на каждую цель.\n");

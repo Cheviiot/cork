@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <map>
 #include <string>
+#include <string_view>
 
 #include "base/error.hpp"
 
@@ -78,5 +79,18 @@ struct Config {
 // на два уровня выше — но поиск идёт вверх, а не по фиксированной глубине:
 // так раскладка может измениться, не ломая обёртки.
 Result<std::filesystem::path> find_generation_root(const std::filesystem::path &start);
+
+// Приводит написание цели к тому, которым cork называет её внутри: x64, x86,
+// arm64.
+//
+// Зачем вообще несколько написаний. Cork говорит «x64», а мир вокруг —
+// триплетами: clang, rust, vcpkg и половина документации знают
+// «x86_64-pc-windows-msvc». Человек, пришедший из тех инструментов, наберёт
+// то, к чему привык, и получит «no target», хотя цель есть. Принимать оба
+// написания стоит одной таблицы, а не заставлять переучиваться.
+//
+// Пустая строка на выходе означает, что написание неизвестно; вызывающий
+// решает, ошибка это или повод взять умолчание.
+[[nodiscard]] std::string normalise_target(std::string_view spelling);
 
 } // namespace cork::setup

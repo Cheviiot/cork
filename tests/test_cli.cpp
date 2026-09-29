@@ -12,6 +12,7 @@
 #include <string_view>
 
 #include "check.h"
+#include "setup/config.hpp"
 #include "cli/spec.hpp"
 #include "i18n/messages.hpp"
 
@@ -98,7 +99,30 @@ void test_command_help_mentions_every_option() {
 
 } // namespace
 
+void test_target_spellings() {
+    // Короткие имена — как были.
+    CHECK_EQ(cork::setup::normalise_target("x64"), "x64");
+    CHECK_EQ(cork::setup::normalise_target("x86"), "x86");
+    CHECK_EQ(cork::setup::normalise_target("arm64"), "arm64");
+
+    // Триплеты, которыми ту же цель называют clang, rust и vcpkg.
+    CHECK_EQ(cork::setup::normalise_target("x86_64-pc-windows-msvc"), "x64");
+    CHECK_EQ(cork::setup::normalise_target("i686-pc-windows-msvc"), "x86");
+    CHECK_EQ(cork::setup::normalise_target("aarch64-pc-windows-msvc"), "arm64");
+    CHECK_EQ(cork::setup::normalise_target("AMD64"), "x64");
+    CHECK_EQ(cork::setup::normalise_target("win32"), "x86");
+
+    // Неизвестное остаётся неизвестным: молча подставить сюда умолчание
+    // значило бы собрать не под то, о чём просили.
+    CHECK(cork::setup::normalise_target("riscv64").empty());
+    CHECK(cork::setup::normalise_target("").empty());
+    // Похожее, но не то: x86_64h — это не наша цель, и «начинается на x86»
+    // не повод её принять.
+    CHECK(cork::setup::normalise_target("x86_64h-apple-darwin").empty());
+}
+
 int main() {
+    test_target_spellings();
     test_every_command_is_described();
     test_names_are_unique();
     test_common_options_are_everywhere();

@@ -253,6 +253,41 @@ std::string find_sdk_version(const stdfs::path &root) {
     return versions.back();
 }
 
+// Подстановка @ИМЯ@ в шаблонах для чужих сборочных систем.
+//
+// Своя, а не configure_file из CMake: файлы заполняются на машине
+// пользователя во время установки, когда CMake уже ни при чём, а пути
+// зависят от корня установки и цели.
+std::string fill_template(std::span<const std::byte> bytes,
+                          const std::vector<std::pair<std::string, std::string>> &values) {
+    std::string out(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+    for (const auto &[key, value] : values) {
+        const std::string needle = "@" + key + "@";
+        for (std::size_t at = out.find(needle); at != std::string::npos;
+             at = out.find(needle, at + value.size())) {
+            out.replace(at, needle.size(), value);
+        }
+    }
+    return out;
+}
+
+// Как Meson называет эти же архитектуры. Свой словарь, потому что совпадает
+// он с нашим только для arm64, а ошибиться тут значит собрать не то.
+struct MesonNames {
+    const char *family;
+    const char *cpu;
+};
+
+MesonNames meson_names(std::string_view arch) {
+    if (arch == "x64") {
+        return {"x86_64", "x86_64"};
+    }
+    if (arch == "x86") {
+        return {"x86", "i686"};
+    }
+    return {"aarch64", "aarch64"};
+}
+
 Result<InstallReport> install(const InstallOptions &opts) {
     const stdfs::path root = opts.generation_root;
     if (!fs::is_dir(root)) {
@@ -312,14 +347,15 @@ Result<InstallReport> install(const InstallOptions &opts) {
     // человека написать его самому, а написанный самостоятельно почти всегда
     // забывает CMAKE_TRY_COMPILE_TARGET_TYPE и упирается в проверку
     // компилятора, которая пытается запустить собранный Windows-бинарник.
+    constexpr auto kSharedPerms = stdfs::perms::owner_read | stdfs::perms::owner_write |
+                                  stdfs::perms::group_read | stdfs::perms::others_read;
+    const stdfs::path share = root / "share";
     if (!opts.cmake_toolchain.empty()) {
-        const stdfs::path share = root / "share";
         if (auto r = fs::mkdir_p(share); !r.has_value()) {
             return std::unexpected(std::move(r.error()));
         }
-        if (auto r = fs::write_atomic(share / "cork-toolchain.cmake", opts.cmake_toolchain,
-                                      stdfs::perms::owner_read | stdfs::perms::owner_write |
-                                          stdfs::perms::group_read | stdfs::perms::others_read);
+        if (auto r =
+                fs::write_atomic(share / "cork-toolchain.cmake", opts.cmake_toolchain, kSharedPerms);
             !r.has_value()) {
             return std::unexpected(std::move(r.error()).at("placing the CMake toolchain file"));
         }
@@ -364,6 +400,43 @@ Result<InstallReport> install(const InstallOptions &opts) {
             derive_target_paths(cfg.msvc_version, cfg.sdk_version, host, arch, dotnet_host);
         cfg.targets[arch].debug_crt = find_debug_crt(root, arch);
         report.targets.push_back(arch);
+
+        // Точки входа чужих сборочных систем. На каждую цель отдельно: и
+        // vcpkg, и Meson требуют файла на архитектуру, а имя триплета vcpkg
+        // обязано совпадать с именем файла.
+        //
+        // Пути ведут через toolchains/current, а не в это поколение: файл
+        // прописывают в проект один раз, а поколение меняется при каждой
+        // установке, и записанный намертво путь устарел бы молча.
+        if (!opts.install_root.empty()) {
+            const stdfs::path current = opts.install_root / "toolchains" / "current";
+            const auto meson = meson_names(arch);
+            const std::vector<std::pair<std::string, std::string>> values = {
+                {"CORK_TARGET", arch},
+                {"CORK_VCPKG_ARCH", arch},
+                {"CORK_TOOLCHAIN_FILE", (current / "share" / "cork-toolchain.cmake").string()},
+                {"CORK_BIN_DIR", (current / "bin" / arch).string()},
+                {"CORK_COMMAND", (current / "bin" / arch / "cork").string()},
+                {"CORK_MESON_CPU_FAMILY", meson.family},
+                {"CORK_MESON_CPU", meson.cpu},
+            };
+            if (!opts.vcpkg_triplet.empty()) {
+                if (auto r = fs::write_atomic(share / (arch + "-windows.cmake"),
+                                              fill_template(opts.vcpkg_triplet, values),
+                                              kSharedPerms);
+                    !r.has_value()) {
+                    return std::unexpected(std::move(r.error()).at("placing the vcpkg triplet"));
+                }
+            }
+            if (!opts.meson_cross.empty()) {
+                if (auto r = fs::write_atomic(share / ("cork-" + arch + "-cross.ini"),
+                                              fill_template(opts.meson_cross, values),
+                                              kSharedPerms);
+                    !r.has_value()) {
+                    return std::unexpected(std::move(r.error()).at("placing the Meson cross file"));
+                }
+            }
+        }
     }
 
     if (cfg.targets.empty()) {
