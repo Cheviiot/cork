@@ -23,6 +23,22 @@ the real thing. Use it when "close enough to MSVC" is not close enough:
 shipping Windows binaries from Linux CI, reproducing a compiler bug, or
 building code that only ever compiled on Windows.
 
+## Getting cork
+
+One binary, and it carries everything it needs to bootstrap the rest.
+
+```console
+$ curl -fsSLO https://github.com/Cheviiot/cork/releases/latest/download/SHA256SUMS
+$ curl -fsSLO https://github.com/Cheviiot/cork/releases/latest/download/cork-0.1.0-linux-x86_64.tar.gz
+$ sha256sum --ignore-missing -c SHA256SUMS
+$ tar -xzf cork-*-linux-x86_64.tar.gz && install -m755 cork-*/cork ~/.local/bin/
+```
+
+**There is no release yet**, so those URLs do not resolve today. The workflow
+that produces them is in place and has not been run; until it is, build from
+source — see `docs/development.md`. Saying it plainly beats an install
+command that quietly 404s.
+
 ## What you need
 
 A 64-bit Linux machine and roughly 12 GB of disk: about 3 GB of downloads
@@ -63,6 +79,19 @@ $ vcpkg install zlib --triplet x64-windows \
 Targets can be named either way: `x64` or `x86_64-pc-windows-msvc`, `x86` or
 `i686-pc-windows-msvc`, `arm64` or `aarch64-pc-windows-msvc`. Whichever your
 other tools taught you is the one that works.
+
+Editors work too, with one file:
+
+```console
+$ cork env --clangd > .clangd
+```
+
+clangd recognises the `cl` wrapper on its own and switches to MSVC mode, but
+it cannot find a single header without this: MSVC takes their location from
+`INCLUDE`, which the wrapper sets for the compiler it launches and nowhere
+else. The generated config points clangd at the same tree through
+`/winsysroot`, and pins the MSVC version so `_MSC_VER` in the editor agrees
+with what the compiler actually defines.
 
 `ccache` works through the wrappers — the second compilation is served from
 the cache and the object file is identical.

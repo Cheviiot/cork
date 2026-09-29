@@ -1,0 +1,156 @@
+name: Release
+
+# Собирает и публикует сам cork — один исполняемый файл, который человек
+# скачивает и кладёт в PATH. Всё остальное cork берёт на себя сам.
+#
+# Почему это отдельно от CI. CI проверяет, что дерево собирается и проходит
+# тесты, четырьмя пресетами сразу, и собирает без PE-хелпера: для проверки
+# кода он не нужен. Релизный бинарник без хелпера бесполезен — им нельзя
+# запустить ни один инструмент, — поэтому здесь порядок другой и строже.
+#
+# Ubuntu 22.04, а не latest: glibc там 2.35, и собранное работает на
+# дистрибутивах не новее. Собранное на свежем glibc не запустится на старом,
+# и узнает об этом не тот, кто собирал.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      wine_sdk_run_id:
+        description: "Run id of the Wine Release workflow to take the SDK artefact from (blank: latest successful)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Build cork linux/x86_64
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build cmake g++ pkg-config zip unzip tar curl zstd \
+            autoconf automake libtool autoconf-archive bison flex
+
+      # PE-часть хелпера собирает clang через wineg++, и стоковый clang 14 на
+      # 22.04 для этого стар. Ставим ту же версию, что и сборка Wine, чтобы
+      # хелпер и рантайм были собраны одним компилятором.
+      - name: Install clang
+        run: |
+          curl -fsSL https://apt.llvm.org/llvm.sh -o llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 19
+          sudo ln -sf /usr/bin/clang-19 /usr/bin/clang
+          sudo ln -sf /usr/bin/clang++-19 /usr/bin/clang++
+          clang --version
+
+      # Хелпер собирается против devel-части Wine, и только против неё:
+      # заголовки, импорт-библиотеки и wineg++ лежат именно там. Рантайм для
+      # этого не нужен — проверено, дерево sdk самодостаточно.
+      - name: Fetch the Wine SDK
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ inputs.wine_sdk_run_id }}
+        run: |
+          if [ -z "$RUN_ID" ]; then
+            RUN_ID="$(gh run list --workflow wine-release.yml --status success \
+                        --limit 1 --json databaseId --jq '.[0].databaseId')"
+          fi
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "::error::no successful Wine Release run to take the SDK from." \
+                 "Run that workflow first: the helper cannot be built without it."
+            exit 1
+          fi
+          echo "Taking the Wine SDK from run $RUN_ID"
+          gh run download "$RUN_ID" --name cork-wine-sdk-linux-amd64 --dir "$RUNNER_TEMP/sdkzip"
+          mkdir -p "$RUNNER_TEMP/winesdk"
+          unzip -q "$RUNNER_TEMP/sdkzip"/*.zip -d "$RUNNER_TEMP/winesdk"
+          test -x "$RUNNER_TEMP/winesdk/bin/wineg++"
+
+      - name: Build the PE helper
+        run: |
+          tools/wine/build-helper.sh --wine "$RUNNER_TEMP/winesdk" \
+                                     --out "$RUNNER_TEMP/cork-helper.exe"
+          file "$RUNNER_TEMP/cork-helper.exe" | grep -q 'PE32+'
+
+      - name: Set up vcpkg at the manifest baseline
+        run: |
+          baseline="$(python3 -c 'import json;print(json.load(open("vcpkg.json"))["builtin-baseline"])')"
+          git clone https://github.com/microsoft/vcpkg.git "$RUNNER_TEMP/vcpkg"
+          git -C "$RUNNER_TEMP/vcpkg" checkout --detach "$baseline"
+          "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+          echo "VCPKG_ROOT=$RUNNER_TEMP/vcpkg" >> "$GITHUB_ENV"
+
+      - name: Configure and build
+        run: |
+          cmake --preset linux-release -DCORK_HELPER="$RUNNER_TEMP/cork-helper.exe"
+          cmake --build --preset linux-release
+
+      - name: Test
+        run: ctest --preset linux-release
+
+      # Проверка, а не надежда. Бинарник без вшитого хелпера собирается и
+      # запускается, но не может выполнить ни одного инструмента, и узнаётся
+      # это уже у человека. `cork install` отказывается работать без него —
+      # этим и пользуемся.
+      - name: Refuse a binary without the helper
+        run: |
+          out="$(./build/linux-release/cork install --root "$RUNNER_TEMP/probe" 2>&1 || true)"
+          echo "$out"
+          if echo "$out" | grep -qi 'helper'; then
+            echo "::error::the built cork has no PE helper embedded"
+            exit 1
+          fi
+
+      - name: Package
+        id: package
+        run: |
+          version="$(./build/linux-release/cork --version | head -1 | awk '{print $2}')"
+          name="cork-${version}-linux-x86_64"
+          mkdir -p "dist/$name"
+          cp build/linux-release/cork "dist/$name/"
+          cp README.md LICENSE.txt "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          (cd dist && sha256sum "$name.tar.gz" | tee SHA256SUMS)
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          ldd "dist/$name/cork" || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+          if-no-files-found: error
+
+      # Только для тега. Ручной запуск собирает и проверяет, но ничего не
+      # публикует: релиз, появившийся от нажатия кнопки, потом не объяснить.
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          gh release create "$tag" --title "cork $tag" --generate-notes \
+            dist/*.tar.gz dist/SHA256SUMS
