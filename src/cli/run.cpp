@@ -171,7 +171,7 @@ int cmd_run(const std::vector<std::string> &args) {
             exec::RunOptions opts;
             opts.program = command[0];
             // Поколение берётся от current, а не от собственного пути: сам
-            // cork лежит где угодно, а обёртки — внутри поколения, и только
+            // Cork лежит где угодно, а обёртки — внутри поколения, и только
             // им путь от себя что-то говорит.
             if (auto current = root.resolve_current(); current.has_value()) {
                 opts.generation_root = *current;

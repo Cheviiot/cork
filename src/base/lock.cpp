@@ -20,7 +20,7 @@ namespace {
 std::string holder_hint(const std::filesystem::path &path) {
     auto content = fs::read_file(path);
     if (!content.has_value() || content->empty()) {
-        return "another cork process";
+        return "another Cork process";
     }
     return "pid " + *content;
 }
@@ -76,7 +76,7 @@ Result<Lock> Lock::acquire(const std::filesystem::path &dir, std::string_view na
         if (wait_ms == 0 || (wait_ms > 0 && clock::now() >= deadline)) {
             const std::string who = holder_hint(path);
             ::close(fd);
-            return err_conflict("another cork process is already working on \"" +
+            return err_conflict("another Cork process is already working on \"" +
                                 std::string(name) + "\" (" + who + ")");
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(50));

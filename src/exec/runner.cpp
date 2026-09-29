@@ -118,7 +118,7 @@ Result<stdfs::path> resolve_wine(const setup::Config &cfg) {
         // Если артефакт для этой версии ещё не опубликован, download скажет
         // об этом своими словами и предложит собрать.
         return err_not_found(fmt::format(
-            "the cork Wine runtime {} is not installed at {}\n"
+            "the Cork Wine runtime {} is not installed at {}\n"
             "Run `cork setup --accept-license` to get it. A system Wine is not supported.",
             cfg.wine_id, wine.string()));
     }
@@ -437,7 +437,7 @@ int run_tool(std::string_view tool, const std::vector<std::string> &args,
         if (found.has_value()) {
             root = *found;
         } else {
-            // А сам cork лежит где угодно — хоть в /usr/local/bin, — и для
+            // А сам Cork лежит где угодно — хоть в /usr/local/bin, — и для
             // «cork cl x.c» путь от себя не значит ничего. Тогда работает
             // current. Без этого человек, поставивший один бинарник в PATH,
             // получает «installation is incomplete» при исправной установке.

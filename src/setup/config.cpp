@@ -106,7 +106,7 @@ Result<Config> Config::from_json(std::string_view json) {
                 kConfigFileName, version, kSchemaVersion));
         }
         return err_config(fmt::format(
-            "{} has schema {} but this cork expects {}; re-run `cork install`",
+            "{} has schema {} but this Cork expects {}; re-run `cork install`",
             kConfigFileName, version, kSchemaVersion));
     }
 
@@ -212,7 +212,7 @@ std::string normalise_target(std::string_view spelling) {
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
     // Триплет опознаётся по началу: всё, что идёт после архитектуры
-    // (vendor, система, abi), для нас ничего не меняет — цель у cork всегда
+    // (vendor, система, abi), для нас ничего не меняет — цель у Cork всегда
     // windows-msvc, другой она быть не может.
     const auto starts_with = [&lower](std::string_view prefix) {
         return lower.size() >= prefix.size() && lower.compare(0, prefix.size(), prefix) == 0;

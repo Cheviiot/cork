@@ -46,7 +46,7 @@ Result<State> state_from_name(std::string_view);
 struct StateEntry {
     State state = State::Resolved;
     std::string at;       // ISO 8601 UTC
-    std::string version;  // версия cork, выполнившая переход
+    std::string version;  // версия Cork, выполнившая переход
 };
 
 struct ManifestSource {

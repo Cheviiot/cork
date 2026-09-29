@@ -224,7 +224,7 @@ Result<Receipt> Receipt::from_json(std::string_view text) {
     const auto version = opt_int(root, "schema_version");
     if (version != kReceiptSchemaVersion) {
         // Внятный отказ вместо догадки: чужая версия схемы означает, что
-        // поколение создано другим cork, и молча читать из него половину
+        // поколение создано другим Cork, и молча читать из него половину
         // полей хуже, чем сказать об этом.
         return err_config(fmt::format("receipt schema version is {}, this build understands {}",
                                       version, kReceiptSchemaVersion));
