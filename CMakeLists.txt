@@ -49,6 +49,7 @@ set(CORK_WINE_ID "11.18-mono11.3.0" CACHE STRING "Wine runtime this build expect
 set(CORK_HELPER "" CACHE FILEPATH "Built cork-helper.exe to embed")
 cork_generate_embedded_helper("${CMAKE_BINARY_DIR}/generated/cork_embedded_helper.h")
 cork_generate_embedded_toolchain("${CMAKE_BINARY_DIR}/generated/cork_embedded_toolchain.h")
+cork_generate_embedded_runtime_pins("${CMAKE_BINARY_DIR}/generated/cork_embedded_runtime_pins.h")
 
 # Ревизия снимается на этапе конфигурации, а не сборки. Это значит, что после
 # коммита без переконфигурации строка версии останется прежней — сознательный
@@ -114,6 +115,7 @@ add_library(cork_core STATIC
     src/setup/layout.cpp
     src/setup/prefix.cpp
     src/setup/receipt.cpp
+    src/setup/runtime.cpp
     src/store/store.cpp
     src/manifest/index.cpp
     src/manifest/model.cpp
@@ -132,9 +134,9 @@ target_compile_definitions(cork_core PUBLIC
 )
 # -Wno-c++26-extensions: #embed пришёл из C23 и попадёт в C++ только в C++26,
 # так что gcc считает его расширением. Снять, когда проект перейдёт на C++26;
-# признак — предупреждение перестанет появляться без флага. Стоит на одном
-# файле, а не на цели: это единственное место, где используется #embed.
-set_source_files_properties(src/cli/install.cpp PROPERTIES
+# признак — предупреждение перестанет появляться без флага. Стоит на файлах, а
+# не на цели: их два, и оба — те, что читают вшитые ресурсы.
+set_source_files_properties(src/cli/install.cpp src/setup/runtime.cpp PROPERTIES
     COMPILE_OPTIONS -Wno-c++26-extensions)
 
 cork_set_warnings(cork_core)

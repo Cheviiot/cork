@@ -96,6 +96,7 @@ namespace cork::i18n {
     X(DownloadedInto, "Downloaded into {}\n")                                                  \
     X(UnpackedInto, "Unpacked {} payloads ({} files from installers) into {}\n")               \
     X(NextInstall, "Next: cork install {}\n")                                                  \
+    X(RuntimeInstalled, "Installed the Wine runtime {}: {} files, {} symlinks\n")  \
                                                                                                \
     /* ход установки */                                                                        \
     X(Relocating, "Relocating unpacked components\n")                                          \

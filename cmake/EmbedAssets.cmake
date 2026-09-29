@@ -87,3 +87,32 @@ inline std::span<const std::byte> cmake_toolchain() {
 ")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${source}")
 endfunction()
+
+# Список закреплённых артефактов рантайма. Вшивается по той же причине, что и
+# каталоги локализации: без него первая установка невозможна, а отдельный файл
+# рядом с программой теряется при копировании.
+function(cork_generate_embedded_runtime_pins output_file)
+    set(source "${CMAKE_SOURCE_DIR}/wine/runtime-pins.txt")
+    file(WRITE "${output_file}"
+"// Создаётся CMake, не редактировать.
+#pragma once
+
+#include <cstddef>
+#include <span>
+
+namespace cork::assets {
+
+inline constexpr unsigned char kRuntimePinsBytes[] = {
+#embed \"${source}\"
+};
+
+inline std::span<const std::byte> runtime_pins() {
+    return std::span<const std::byte>(
+        reinterpret_cast<const std::byte *>(kRuntimePinsBytes),
+        sizeof kRuntimePinsBytes);
+}
+
+} // namespace cork::assets
+")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${source}")
+endfunction()

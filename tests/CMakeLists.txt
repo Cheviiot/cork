@@ -18,6 +18,7 @@ set(cork_tests
     test_protocol
     test_resolve
     test_response
+    test_runtime
     test_session
     test_sha256
     test_shims
@@ -46,6 +47,7 @@ set_source_files_properties(test_generation.cpp PROPERTIES
 # Фикстуры zip собираются тем же libzip, поэтому тесту нужен прямой доступ к
 # библиотеке: у cork_core она PRIVATE и наружу не торчит.
 target_link_libraries(test_zip PRIVATE libzip::zip)
+target_link_libraries(test_runtime PRIVATE libzip::zip)
 
 # Проверкам против настоящего Wine нужны собранные Wine и хелпер, которых
 # обычная сборка не производит. Тест сам определяет их наличие и возвращает 77,

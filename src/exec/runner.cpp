@@ -113,14 +113,13 @@ Result<stdfs::path> resolve_wine(const setup::Config &cfg) {
     }
     const stdfs::path wine = root->runtime(cfg.wine_id) / "bin" / "wine";
     if (!fs::is_regular_file(wine)) {
-        // Сказано ровно то, что есть. Прежний текст отправлял за рантаймом к
-        // `cork download`, а тот его не качает — ни строки про Wine во всей
-        // команде нет. На чужой машине это тупик: человек делает, что
-        // сказано, ничего не меняется, и почему — не видно.
+        // `cork download` действительно его ставит — с тех пор, как умеет:
+        // раньше этот текст отправлял туда, где про Wine не было ни строки.
+        // Если артефакт для этой версии ещё не опубликован, download скажет
+        // об этом своими словами и предложит собрать.
         return err_not_found(fmt::format(
             "the cork Wine runtime {} is not installed at {}\n"
-            "Build it with tools/wine/build.sh and put the result there; fetching a\n"
-            "published runtime is not implemented yet. A system Wine is not supported.",
+            "Run `cork download` to fetch it. A system Wine is not supported.",
             cfg.wine_id, wine.string()));
     }
     return wine;

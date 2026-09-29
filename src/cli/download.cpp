@@ -22,6 +22,7 @@
 #include "net/http.hpp"
 #include "resolve/resolve.hpp"
 #include "setup/generation.hpp"
+#include "setup/runtime.hpp"
 #include "setup/receipt.hpp"
 #include "store/store.hpp"
 
@@ -566,6 +567,26 @@ int cmd_download(const std::vector<std::string> &raw_args) {
     if (auto r = receipt.save(dest); !r.has_value()) {
         fmt::print(stderr, "cork download: {}\n", r.error().to_string());
         return 1;
+    }
+
+    // Рантайм Wine — здесь же, а не отдельной командой. Без него из
+    // скачанного нельзя ни собрать, ни проверить ничего, а «скачайте ещё
+    // вот это» — тот самый шаг, который пропускают.
+    //
+    // Отсутствие закрепления не отменяет уже сделанной работы: пакеты
+    // скачаны, дерево распаковано, и install по ним пройдёт, как только
+    // рантайм появится. Поэтому сообщение на stderr, а не отказ.
+    if (auto pins = setup::builtin_runtime_pins(); pins.has_value()) {
+        auto installed =
+            setup::install_runtime(root, wine_runtime_id(), *pins, artifact_store, progress);
+        if (!installed.has_value()) {
+            fmt::print(stderr, "cork download: {}\n", installed.error().to_string());
+        } else if (!installed->already_present) {
+            i18n::say(i18n::Msg::RuntimeInstalled, wine_runtime_id(), installed->files,
+                      installed->symlinks);
+        }
+    } else {
+        fmt::print(stderr, "cork download: {}\n", pins.error().to_string());
     }
 
     // Каталог сборки переживает эту команду: его подхватит install. Без

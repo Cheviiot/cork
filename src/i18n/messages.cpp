@@ -101,6 +101,8 @@ const Table &russian() {
         set(Msg::DownloadedInto, "Скачано в {}\n");
         set(Msg::UnpackedInto, "Распаковано пейлоадов: {} (файлов из установщиков: {}) в {}\n");
         set(Msg::NextInstall, "Дальше: cork install {}\n");
+        set(Msg::RuntimeInstalled,
+            "Установлен рантайм Wine {}: файлов {}, символьных ссылок {}\n");
 
         set(Msg::Relocating, "Раскладываю распакованные компоненты\n");
         set(Msg::UsingMsvc, "Использую MSVC {}\n");
