@@ -105,8 +105,13 @@ cd "$build_dir"
 
 if [ ! -f Makefile ] || [ "$src_dir/configure" -nt Makefile ] || [ "$flags_file" -nt Makefile ]; then
     echo "==> configure (${#configure_flags[@]} flags, prefix $install_prefix)"
+    # Обе архитектуры, а не одна: с --enable-archs=i386,x86_64 PE-часть
+    # собирается дважды, и i386 без своей переменной берёт просто "clang" —
+    # то есть системный, ровно тот, из-за которого переменная и понадобилась.
     configure_env=()
-    [ -n "$pe_cc" ] && configure_env+=("x86_64_CC=$pe_cc")
+    if [ -n "$pe_cc" ]; then
+        configure_env+=("x86_64_CC=$pe_cc" "i386_CC=$pe_cc")
+    fi
     env "${configure_env[@]}" "$src_dir/configure" \
         "${configure_flags[@]}" \
         --prefix="$install_prefix"
