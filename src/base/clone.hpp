@@ -58,4 +58,22 @@ struct CloneStats {
 
 const char *clone_method_name(CloneMethod);
 
+// Заменяет to reflink-копией from, не трогая ни права, ни время изменения
+// исходного to.
+//
+// Только reflink и ничего кроме: смысл вызова в том, чтобы два одинаковых
+// файла перестали занимать место дважды. Обычное копирование этой цели не
+// достигает, поэтому отсутствие reflink — отказ, а to остаётся как был.
+//
+// Жёсткая ссылка здесь запрещена по той же причине, что и в clone_tree: Wine
+// перезаписывает встроенные DLL в префиксе на месте. Reflink это переживает —
+// запись копирует экстент и разводит файлы обратно, — а жёсткая ссылка
+// испортила бы общий runtime.
+[[nodiscard]] Result<void> reflink_replace(const std::filesystem::path &from,
+                                           const std::filesystem::path &to);
+
+// Совпадают ли файлы побайтово. Размер сверяется первым, содержимое читается
+// только при его совпадении.
+[[nodiscard]] bool files_identical(const std::filesystem::path &a, const std::filesystem::path &b);
+
 } // namespace cork::fs

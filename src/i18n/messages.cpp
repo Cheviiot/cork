@@ -121,6 +121,8 @@ const Table &russian() {
         set(Msg::TemplateAt, "Шаблон в {}\n");
         set(Msg::TemplateStats, "  ссылок профиля заменено: {}, ссылок устройств удалено: {}, "
                                 "путей в реестре исправлено: {}\n");
+        set(Msg::TemplateShared,
+            "  Указывают на рантайм вместо копии: {} файлов ({})\n");
         set(Msg::TemplateNote,
             "Новые сборочные сессии будут клонировать его вместо запуска wineboot.\n");
         set(Msg::NoSessions, "Сборочных сессий нет.\n");

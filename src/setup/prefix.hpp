@@ -33,6 +33,8 @@ struct DepersonaliseStats {
     std::uint64_t links_replaced = 0;   // симлинки в домашний каталог -> пустые каталоги
     std::uint64_t devices_removed = 0;  // com1..com9, lpt1..lpt9 из dosdevices
     std::uint64_t registry_edits = 0;   // строки в .reg, где путь заменён
+    std::uint64_t shared_files = 0;     // файлов, разделённых с runtime через reflink
+    std::uint64_t shared_bytes = 0;     // сколько места это освободило
 };
 
 // Убирает из префикса следы того, кто и где его создал.
@@ -80,7 +82,10 @@ struct PortabilityViolation {
 [[nodiscard]] Result<void> boot_prefix(const std::filesystem::path &wine_runtime,
                                        const std::filesystem::path &prefix);
 
+// wine_runtime нужен, чтобы разделить с ним одинаковые файлы: см.
+// share_with_runtime в prefix.cpp. Пустой путь этот шаг пропускает.
 [[nodiscard]] Result<DepersonaliseStats> build_prefix_template(
-    const std::filesystem::path &prefix, const std::filesystem::path &destination);
+    const std::filesystem::path &prefix, const std::filesystem::path &destination,
+    const std::filesystem::path &wine_runtime = {});
 
 } // namespace cork::setup

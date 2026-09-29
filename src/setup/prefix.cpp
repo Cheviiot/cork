@@ -387,6 +387,64 @@ bool prefix_matches_wine(const stdfs::path &prefix, const stdfs::path &wine_runt
     return recorded >= inf_epoch;
 }
 
+// Разделяет с runtime те файлы префикса, которые ему побайтово равны.
+//
+// wineboot раскладывает встроенные DLL в system32 и syswow64 копированием из
+// runtime, и копии выходят точные: 1406 файлов при нуле отличающихся.
+// Копированием настоящим, а не разделением экстентов, — проверено на btrfs:
+// свежий префикс занимает 1,2 ГБ, из них 561,77 МиБ в одном только system32
+// эксклюзивные. После reflink освобождается 1,1 ГБ, и префикс занимает
+// 124 МиБ.
+//
+// Считать по `du` тут нельзя: он приписывает разделённый экстент каждому
+// файлу отдельно и показывает 1,2 ГБ и до, и после. Нужен либо
+// `btrfs filesystem du`, либо разница свободного места.
+//
+// Reflink, а не жёсткая ссылка, и это принципиально: Wine перезаписывает
+// встроенные DLL в префиксе на месте (dlls/setupapi/fakedll.c,
+// create_dest_file). Reflink это переживает — запись копирует экстент и
+// разводит файлы обратно, — а жёсткая ссылка испортила бы общий runtime.
+//
+// Отсутствие reflink не отказ: на ext4 префикс просто останется как был.
+void share_with_runtime(const stdfs::path &prefix, const stdfs::path &wine_runtime,
+                        DepersonaliseStats &stats) {
+    const std::pair<const char *, const char *> pairs[] = {
+        {"drive_c/windows/system32", "lib/wine/x86_64-windows"},
+        {"drive_c/windows/syswow64", "lib/wine/i386-windows"},
+    };
+    std::error_code ec;
+    for (const auto &[in_prefix, in_runtime] : pairs) {
+        const stdfs::path dir = prefix / in_prefix;
+        const stdfs::path src_dir = wine_runtime / in_runtime;
+        if (!fs::is_dir(dir) || !fs::is_dir(src_dir)) {
+            continue;
+        }
+        for (const auto &entry : stdfs::directory_iterator(dir, ec)) {
+            if (ec) {
+                return;
+            }
+            if (!entry.is_regular_file(ec) || entry.is_symlink(ec)) {
+                continue;
+            }
+            const stdfs::path src = src_dir / entry.path().filename();
+            if (!fs::is_regular_file(src) || !fs::files_identical(src, entry.path())) {
+                continue;
+            }
+            const auto size = entry.file_size(ec);
+            if (ec) {
+                continue;
+            }
+            if (!fs::reflink_replace(src, entry.path()).has_value()) {
+                // Первый отказ означает, что файловая система так не умеет;
+                // остальные тысячи файлов ответят тем же.
+                return;
+            }
+            ++stats.shared_files;
+            stats.shared_bytes += size;
+        }
+    }
+}
+
 Result<void> boot_prefix(const stdfs::path &wine_runtime, const stdfs::path &prefix) {
     const stdfs::path wine = wine_runtime / "bin" / "wine";
     if (!fs::is_regular_file(wine)) {
@@ -460,11 +518,19 @@ Result<void> boot_prefix(const stdfs::path &wine_runtime, const stdfs::path &pre
     if (!fs::is_regular_file(prefix / "system.reg")) {
         return err_verification("wineboot left no registry in " + prefix.string());
     }
+
+    // Сразу после загрузки, пока префиксом никто не пользовался: именно здесь
+    // лежат нетронутые копии встроенных DLL, и именно здесь их дешевле всего
+    // вернуть в общие экстенты. Молча — это внутренний шаг, а не результат,
+    // о котором стоит докладывать.
+    DepersonaliseStats ignored;
+    share_with_runtime(prefix, wine_runtime, ignored);
     return {};
 }
 
 Result<DepersonaliseStats> build_prefix_template(const stdfs::path &prefix,
-                                                 const stdfs::path &destination) {
+                                                 const stdfs::path &destination,
+                                                 const stdfs::path &wine_runtime) {
     std::error_code ec;
     if (stdfs::exists(destination, ec)) {
         return err_conflict(fmt::format("{} already exists", destination.string()));
@@ -497,6 +563,10 @@ Result<DepersonaliseStats> build_prefix_template(const stdfs::path &prefix,
             stdfs::remove_all(destination, ec);
             return std::unexpected(std::move(r).error().at("preparing the template"));
         }
+    }
+
+    if (!wine_runtime.empty()) {
+        share_with_runtime(destination, wine_runtime, *stats);
     }
 
     // Гейт переносимости. Он здесь не для порядка: это единственное место, где

@@ -21,6 +21,8 @@ namespace {
 
 namespace stdfs = std::filesystem;
 
+constexpr std::size_t kChunk = 1 << 20;
+
 class Fd {
 public:
     explicit Fd(int fd) : fd_(fd) {}
@@ -33,6 +35,12 @@ public:
     }
     [[nodiscard]] int get() const { return fd_; }
     [[nodiscard]] bool ok() const { return fd_ >= 0; }
+    void close() {
+        if (fd_ >= 0) {
+            ::close(fd_);
+            fd_ = -1;
+        }
+    }
 
 private:
     int fd_;
@@ -78,7 +86,7 @@ Result<void> copy_contents(int in, int out, std::uint64_t size, CloneMethod &met
         }
     }
 
-    std::vector<char> buf(1 << 20);
+    std::vector<char> buf(kChunk);
     for (;;) {
         const ssize_t n = ::read(in, buf.data(), buf.size());
         if (n == 0) {
@@ -258,6 +266,86 @@ Result<CloneStats> clone_tree(const stdfs::path &from, const stdfs::path &to) {
         }
     }
     return stats;
+}
+
+bool files_identical(const stdfs::path &a, const stdfs::path &b) {
+    struct stat sa {};
+    struct stat sb {};
+    if (::stat(a.c_str(), &sa) != 0 || ::stat(b.c_str(), &sb) != 0) {
+        return false;
+    }
+    if (!S_ISREG(sa.st_mode) || !S_ISREG(sb.st_mode) || sa.st_size != sb.st_size) {
+        return false;
+    }
+    // Один и тот же файл — уже одно и то же место на диске, делить нечего.
+    if (sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino) {
+        return false;
+    }
+    Fd fa(::open(a.c_str(), O_RDONLY | O_CLOEXEC));
+    Fd fb(::open(b.c_str(), O_RDONLY | O_CLOEXEC));
+    if (!fa.ok() || !fb.ok()) {
+        return false;
+    }
+    std::vector<char> ba(kChunk);
+    std::vector<char> bb(kChunk);
+    for (;;) {
+        const ssize_t ra = ::read(fa.get(), ba.data(), ba.size());
+        const ssize_t rb = ::read(fb.get(), bb.data(), bb.size());
+        if (ra < 0 || rb < 0 || ra != rb) {
+            return false;
+        }
+        if (ra == 0) {
+            return true;
+        }
+        if (std::memcmp(ba.data(), bb.data(), static_cast<std::size_t>(ra)) != 0) {
+            return false;
+        }
+    }
+}
+
+Result<void> reflink_replace(const stdfs::path &from, const stdfs::path &to) {
+    struct stat st {};
+    if (::stat(to.c_str(), &st) != 0) {
+        return err_errno(fmt::format("stat {}", to.string()), errno);
+    }
+    Fd in(::open(from.c_str(), O_RDONLY | O_CLOEXEC));
+    if (!in.ok()) {
+        return err_errno(fmt::format("opening {}", from.string()), errno);
+    }
+    // Через временный файл рядом и rename: прерывание на середине не должно
+    // оставить в префиксе обрезанную DLL.
+    const stdfs::path tmp = to.parent_path() / (to.filename().string() + ".reflink.tmp");
+    Fd out(::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, st.st_mode & 07777));
+    if (!out.ok()) {
+        return err_errno(fmt::format("creating {}", tmp.string()), errno);
+    }
+    if (::ioctl(out.get(), FICLONE, in.get()) != 0) {
+        const int saved = errno;
+        out.close();
+        std::error_code ec;
+        stdfs::remove(tmp, ec);
+        return err_errno(fmt::format("reflinking {} onto {}", from.string(), to.string()), saved);
+    }
+    if (::fchmod(out.get(), st.st_mode & 07777) != 0) {
+        return err_errno(fmt::format("setting permissions on {}", tmp.string()), errno);
+    }
+    // Время изменения — как у заменяемого файла: по mtime wine.inf Wine
+    // решает, обновлять ли префикс, и сбив его, мы получили бы
+    // update_wineprefix на каждую сборку.
+    struct timespec times[2];
+    times[0] = st.st_atim;
+    times[1] = st.st_mtim;
+    if (::futimens(out.get(), times) != 0) {
+        return err_errno(fmt::format("setting times on {}", tmp.string()), errno);
+    }
+    out.close();
+    std::error_code ec;
+    stdfs::rename(tmp, to, ec);
+    if (ec) {
+        stdfs::remove(tmp, ec);
+        return err_io(fmt::format("replacing {}: {}", to.string(), ec.message()));
+    }
+    return {};
 }
 
 } // namespace cork::fs

@@ -297,7 +297,7 @@ int cmd_template(const std::vector<std::string> &args) {
     }
 
     i18n::say(i18n::Msg::BuildingTemplate, source.string());
-    auto stats = setup::build_prefix_template(source, destination);
+    auto stats = setup::build_prefix_template(source, destination, runtime);
     if (!stats.has_value()) {
         fmt::print(stderr, "cork template: {}\n", stats.error().to_string());
         return 1;
@@ -305,6 +305,10 @@ int cmd_template(const std::vector<std::string> &args) {
     i18n::say(i18n::Msg::TemplateAt, destination.string());
     i18n::say(i18n::Msg::TemplateStats, stats->links_replaced, stats->devices_removed,
               stats->registry_edits);
+    if (stats->shared_files > 0) {
+        i18n::say(i18n::Msg::TemplateShared, stats->shared_files,
+                  humanize_bytes(stats->shared_bytes));
+    }
     i18n::say(i18n::Msg::TemplateNote);
     return 0;
 }

@@ -117,6 +117,7 @@ namespace cork::i18n {
     X(TemplateStats,                                                                           \
       "  {} profile links replaced, {} device links removed, {} registry paths fixed\n")       \
     X(TemplateNote, "New build sessions will clone this instead of running wineboot.\n")       \
+    X(TemplateShared, "  {} files ({}) pointed at the runtime instead of copied\n")  \
     X(NoSessions, "No build sessions.\n")                                                      \
     X(SessionInUse, "in use")                                                                  \
     X(RemovedSession, "Removed session {}\n")                                                  \
