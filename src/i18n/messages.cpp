@@ -93,6 +93,8 @@ const Table &russian() {
         set(Msg::OptGenerations, "сколько опубликованных поколений оставить, остальные удалить");
         set(Msg::OptArch, "архитектура цели");
         set(Msg::OptShell, "bash, zsh или fish");
+        set(Msg::OptClangd,
+            "напечатать настройку .clangd, чтобы редактор находил заголовки");
 
         set(Msg::FetchingChannel, "Читаю {}\n");
         set(Msg::FetchingManifest, "Читаю манифест установщика\n");

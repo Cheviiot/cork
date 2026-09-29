@@ -52,6 +52,21 @@ std::string pad_to(std::string_view s, std::size_t width) {
 
 const std::vector<CommandSpec> &command_table() {
     static const std::vector<CommandSpec> table = {
+        // Первой в списке, потому что она и есть обычный путь: остальные —
+        // её части, нужные, когда надо повторить один шаг.
+        {"setup",
+         "--accept-license [options]",
+         Msg::CmdSetup,
+         with_common({
+             {"--accept-license", "", Msg::OptAcceptLicence},
+             {"--msvc-version", "<version>", Msg::OptMsvcVersion, Completes::MsvcVersion, true},
+             {"--sdk-version", "<version>", Msg::OptSdkVersion, Completes::SdkVersion},
+             {"--architecture", "<arch>", Msg::OptArchitecture, Completes::Architecture, true},
+             {"--no-sdk", "", Msg::OptNoSdk},
+             {"--store", "<dir>", Msg::OptStore, Completes::Directory},
+             {"--jobs", "<n>", Msg::OptJobs},
+         })},
+
         {"download",
          "--accept-license [options] [package...]",
          Msg::CmdDownload,
@@ -129,6 +144,7 @@ const std::vector<CommandSpec> &command_table() {
          with_common({
              {"--arch", "<arch>", Msg::OptArch, Completes::Architecture},
              {"--shell", "<shell>", Msg::OptShell},
+             {"--clangd", "", Msg::OptClangd},
          })},
 
         {"completion", "<shell>", Msg::CmdCompletion, with_common({})},

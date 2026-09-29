@@ -68,16 +68,39 @@ std::string detect_shell() {
 
 } // namespace
 
+// Версия, которую понимает -fms-compatibility-version, из версии набора
+// инструментов. 14.51.36231 -> 19.51: первое число компилятора на единицу
+// больше десятки набора, второе совпадает. Соотношение держится у Microsoft
+// с 2015 года и записано здесь, потому что вывести его из чего-то ещё
+// нельзя, а ошибка в нём тихо меняет значение _MSC_VER в редакторе.
+std::string msc_version_of(std::string_view msvc_version) {
+    const auto dot = msvc_version.find('.');
+    if (dot == std::string_view::npos) {
+        return {};
+    }
+    const std::string_view major = msvc_version.substr(0, dot);
+    const auto second = msvc_version.find('.', dot + 1);
+    const std::string_view minor = msvc_version.substr(
+        dot + 1, second == std::string_view::npos ? std::string_view::npos : second - dot - 1);
+    if (major != "14" || minor.empty()) {
+        return {};
+    }
+    return "19." + std::string(minor);
+}
+
 int cmd_env(const std::vector<std::string> &args) {
     setup::Root root = setup::Root::from_environment();
     std::string arch;
     std::string shell = detect_shell();
+    bool clangd = false;
 
     for (std::size_t i = 0; i < args.size(); ++i) {
         if (args[i] == "--root" && i + 1 < args.size()) {
             root.base = stdfs::absolute(args[++i]);
         } else if (args[i] == "--arch" && i + 1 < args.size()) {
             arch = args[++i];
+        } else if (args[i] == "--clangd") {
+            clangd = true;
         } else if (args[i] == "--shell" && i + 1 < args.size()) {
             shell = args[++i];
         } else if (args[i] == "-h" || args[i] == "--help") {
@@ -125,6 +148,33 @@ int cmd_env(const std::vector<std::string> &args) {
     // Его читают не обёртки, а cmake пользователя, и второго источника истины
     // тут не возникает: путь тот же самый current, что и у PATH.
     const stdfs::path toolchain = root.current() / "share" / "cork-toolchain.cmake";
+
+    // Настройка для clangd — то, чего не хватает редактору.
+    //
+    // clangd опознаёт обёртку `cl` и сам ставит режим MSVC, но заголовки не
+    // находит ни одного: их расположение компилятор Microsoft берёт из
+    // INCLUDE, а обёртка выставляет его только дочернему процессу и только
+    // на время компиляции. В редакторе INCLUDE взяться неоткуда, и человек
+    // видит `'stdio.h' file not found` в файле, который прекрасно
+    // собирается.
+    //
+    // Лечится тем же /winsysroot, которым пользуется clang-cl: clangd — это
+    // clang, и раскладку он понимает. Версия MSVC задаётся явно, иначе clang
+    // подставит своё умолчание (19.33 против нашей 19.51) и разойдётся с
+    // настоящим компилятором на проверках _MSC_VER.
+    if (clangd) {
+        fmt::print("# cork env --clangd > .clangd\n");
+        fmt::print("CompileFlags:\n");
+        fmt::print("  Add:\n");
+        fmt::print("    - /winsysroot\n");
+        fmt::print("    - {}\n", root.current().string());
+        const std::string ms_version = msc_version_of(cfg->msvc_version);
+        if (!ms_version.empty()) {
+            fmt::print("    - -fms-compatibility-version={}\n", ms_version);
+        }
+        return 0;
+    }
+
     if (shell == "fish") {
         fmt::print("set -gx PATH {} $PATH\n", shell_quote(bin.string()));
         fmt::print("set -gx CORK_TOOLCHAIN_FILE {}\n", shell_quote(toolchain.string()));

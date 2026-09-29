@@ -86,6 +86,7 @@ namespace cork::i18n {
     X(OptGenerations, "keep this many published generations, remove the rest")                 \
     X(OptArch, "target architecture")                                                          \
     X(OptShell, "bash, zsh or fish")                                                           \
+    X(OptClangd, "print a .clangd config so editors can find the headers")           \
                                                                                                \
     /* ход скачивания */                                                                       \
     X(FetchingChannel, "Fetching {}\n")                                                        \

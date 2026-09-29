@@ -52,6 +52,7 @@ CASES=(
     ctest               "ctest runs the Windows binaries it just built"
     winsysroot          "clang-cl builds against the tree as a /winsysroot"
     ccache              "ccache caches compilations through the wrappers"
+    clangd              "clangd resolves the SDK headers with cork env --clangd"
     offline             "a repeat build with the network taken away"
     ogre                "Ogre3D 14.5.2, OgreMain (slow, needs --with-ogre)"
 )
@@ -736,6 +737,45 @@ case_ccache() {
     [ "$hits" -ge 1 ] || { echo "the second compilation did not hit the cache"; return 1; }
     cmp -s a1.obj a2.obj || { echo "the cached object differs from the compiled one"; return 1; }
     NOTE="second compilation served from cache, object identical"
+}
+
+case_clangd() {
+    command -v clangd >/dev/null && command -v cmake >/dev/null || { skip_case "no clangd/cmake"; return 77; }
+    command -v ninja >/dev/null || { skip_case "no ninja"; return 77; }
+    local toolchain="$CORK_ROOT/toolchains/current/share/cork-toolchain.cmake"
+    [ -f "$toolchain" ] || { skip_case "no toolchain file"; return 77; }
+    workdir clangd
+    mkdir -p src
+    cat > src/main.c <<'EOF'
+#include <stdio.h>
+#include <windows.h>
+int main(void) { printf("%lu\n", (unsigned long)GetTickCount()); return 0; }
+EOF
+    printf 'cmake_minimum_required(VERSION 3.28)\nproject(ide C)\nadd_executable(ide src/main.c)\n' > CMakeLists.txt
+    export PATH="$CORK_ROOT/toolchains/current/bin/x64:$PATH"
+    cmake -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE="$toolchain" \
+          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON > cfg.log 2>&1 || { cat cfg.log; return 1; }
+
+    # Без настройки редактор не находит ни одного заголовка: расположение
+    # берётся из INCLUDE, а его обёртка выставляет только дочернему процессу.
+    # Случай проверяет обе стороны, иначе «проходит» означало бы только то,
+    # что clangd вообще запустился.
+    local without
+    without="$(timeout 120 clangd --compile-commands-dir=build --check=src/main.c 2>&1)"
+    expect_contains "$without" "file not found" || {
+        echo "clangd found the headers without a config; this case no longer tests anything"
+        return 1
+    }
+
+    "$CORK_BIN" env --clangd > .clangd || return 1
+    cat .clangd
+    local with
+    with="$(timeout 120 clangd --compile-commands-dir=build --check=src/main.c 2>&1)"
+    expect_contains "$with" "0 errors" || { echo "$with" | tail -20; return 1; }
+    # Версия MSVC должна совпадать с настоящей, иначе _MSC_VER в редакторе
+    # разойдётся с тем, что видит компилятор.
+    expect_contains "$with" "windows-msvc19.51" || return 1
+    NOTE="headers unresolved without .clangd, all checks pass with it"
 }
 
 case_offline() {
