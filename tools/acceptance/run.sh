@@ -610,12 +610,21 @@ EOF
     local pid=$!
     # Ждём, пока сборка действительно начнётся: прервать то, что ещё не
     # запустилось, ничего не проверяет.
+    #
+    # Запас большой намеренно. Без шаблона префикса первая сборка поднимает
+    # префикс с нуля, и это минута, а не секунда; тридцати секунд не хватало,
+    # и случай падал не на том, что проверяет.
     local waited=0
-    while [ "$waited" -lt 60 ]; do
+    while [ "$waited" -lt 240 ]; do
         grep -q 'Building CXX object' build.log 2>/dev/null && break
         sleep 0.5; waited=$((waited + 1))
     done
-    grep -q 'Building CXX object' build.log 2>/dev/null || { echo "build never started"; cat build.log; kill -9 "$pid" 2>/dev/null; return 1; }
+    if ! grep -q 'Building CXX object' build.log 2>/dev/null; then
+        echo "the build never got as far as compiling in $((waited / 2))s:"
+        cat build.log
+        kill -9 -"$pid" 2>/dev/null
+        return 1
+    fi
     sleep 1
 
     kill -INT -"$pid" 2>/dev/null

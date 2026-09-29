@@ -45,14 +45,22 @@ tree="$(cd "$tree" && pwd)"
 
 classes=()
 patterns=()
-while IFS= read -r line; do
-    line="${line%%#*}"
-    # shellcheck disable=SC2086
-    set -- $line
-    [ $# -eq 2 ] || continue
-    case "$1" in
-        runtime|sdk|drop) classes+=("$1"); patterns+=("$2") ;;
-        *) echo "split-devel: unknown class '$1' in $rules" >&2; exit 2 ;;
+# read -r с двумя полями, а не `set -- $line`: там образец попадает под
+# раскрытие имён файлов, и `include/**` превращается в список того, что лежит
+# в текущем каталоге. build.sh к этому моменту стоит в каталоге сборки Wine,
+# где есть include/, — правило рассыпалось на полторы тысячи слов и молча
+# выпало, а вместе с ним и всё, что оно покрывало.
+while read -r class pattern extra; do
+    case "$class" in
+        ''|\#*) continue ;;
+    esac
+    if [ -z "$pattern" ] || [ -n "$extra" ]; then
+        echo "split-devel: expected 'class pattern' in $rules, got: $class $pattern $extra" >&2
+        exit 2
+    fi
+    case "$class" in
+        runtime|sdk|drop) classes+=("$class"); patterns+=("$pattern") ;;
+        *) echo "split-devel: unknown class '$class' in $rules" >&2; exit 2 ;;
     esac
 done < "$rules"
 
@@ -74,25 +82,21 @@ classify() {
 
 before=$(du -sb "$tree" | cut -f1)
 unmatched=()
-moved=0
-dropped=0
+to_move=()
+to_drop=()
 
+# Сначала классифицируется всё дерево и только потом что-либо трогается.
+#
+# Раньше перенос шёл по ходу, а о непокрытых файлах скрипт сообщал в конце, —
+# и упавший прогон оставлял дерево разрезанным пополам: часть в sdk, часть на
+# месте, и понять, где что, уже неоткуда. Отказ обязан не менять ничего.
 while IFS= read -r -d '' file; do
     rel="${file#"$tree"/}"
     class="$(classify "$rel")" || { unmatched+=("$rel"); continue; }
     case "$class" in
         runtime) ;;
-        sdk)
-            moved=$((moved + 1))
-            [ "$dry_run" = 1 ] && continue
-            mkdir -p "$sdk_out/$(dirname "$rel")"
-            mv "$file" "$sdk_out/$rel"
-            ;;
-        drop)
-            dropped=$((dropped + 1))
-            [ "$dry_run" = 1 ] && continue
-            rm -f "$file"
-            ;;
+        sdk) to_move+=("$rel") ;;
+        drop) to_drop+=("$rel") ;;
     esac
 done < <(find "$tree" \( -type f -o -type l \) -print0)
 
@@ -103,13 +107,25 @@ if [ "${#unmatched[@]}" -gt 0 ]; then
     printf '  %s\n' "${unmatched[@]:0:20}" >&2
     [ "${#unmatched[@]}" -gt 20 ] && echo "  ... and $(( ${#unmatched[@]} - 20 )) more" >&2
     echo "Add them to the rules, on purpose, one class each." >&2
+    echo "Nothing was moved." >&2
     exit 1
 fi
+
+moved=${#to_move[@]}
+dropped=${#to_drop[@]}
 
 if [ "$dry_run" = 1 ]; then
     printf 'would move %d file(s) to sdk, drop %d\n' "$moved" "$dropped"
     exit 0
 fi
+
+for rel in ${to_move[@]+"${to_move[@]}"}; do
+    mkdir -p "$sdk_out/$(dirname "$rel")"
+    mv "$tree/$rel" "$sdk_out/$rel" || exit 1
+done
+for rel in ${to_drop[@]+"${to_drop[@]}"}; do
+    rm -f "$tree/$rel" || exit 1
+done
 
 find "$tree" -type d -empty -delete 2>/dev/null
 

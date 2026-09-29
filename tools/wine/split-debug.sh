@@ -8,7 +8,12 @@
 # которые разрешаются по нашей копии.
 #
 # Почему вынимается, а не выбрасывается. Без неё нельзя прочитать ни один
-# аварийный дамп, а собрать Wine заново ради этого — десятки минут.
+# аварийный дамп, а собрать Wine заново ради этого — десятки минут. Поэтому
+# файл, у которого отладочные секции есть, а вынуть их не удалось,
+# останавливает скрипт: «не смог и потому срезал» — худший из возможных
+# исходов, и однажды он уже случился.
+#
+# Запускать надо из контейнера cork-dev. На хосте llvm-objcopy не умеет PE.
 #
 # Почему --strip-debug, а не --strip-all. В PE x86_64 раскрутка стека живёт в
 # .pdata и .xdata, и без них SEH перестаёт работать. Дымовой проверкой это не
@@ -71,15 +76,33 @@ while IFS= read -r -d '' file; do
 
     rel="${file#"$tree"/}"
     mkdir -p "$debug_out/$(dirname "$rel")"
-    # Отсутствие отладочных секций — не ошибка: часть файлов уже без них, и
-    # пустой результат просто убирается.
-    if llvm-objcopy --only-keep-debug "$file" "$debug_out/$rel.debug" 2>/dev/null &&
-       [ -s "$debug_out/$rel.debug" ]; then
-        extracted=$((extracted + 1))
-    else
-        rm -f "$debug_out/$rel.debug"
+
+    # Есть ли что выносить, решается по самому файлу, а не по тому, получилось
+    # ли у objcopy.
+    #
+    # Это не перестраховка. Раньше здесь стояло «не вышло — значит секций и
+    # нет», и на хосте, где llvm-objcopy не умеет PE («debug directory not
+    # found»), скрипт счёл так про 4102 файла из 4231 и всё равно их срезал.
+    # Получилось не разделение, а потеря 700 МБ отладочной информации, о
+    # которой скрипт бодро отчитался как об успехе.
+    if ! llvm-objdump -h "$file" 2>/dev/null | grep -q '\.debug'; then
+        continue
     fi
-    llvm-strip --strip-debug "$file" 2>/dev/null || true
+    if ! llvm-objcopy --only-keep-debug "$file" "$debug_out/$rel.debug" 2>"$debug_out/.err" ||
+       [ ! -s "$debug_out/$rel.debug" ]; then
+        echo "split-debug: $rel has debug sections but they could not be extracted:" >&2
+        sed -n '1,3p' "$debug_out/.err" >&2
+        echo "Nothing was stripped. Run this inside the cork-dev container:" >&2
+        echo "  distrobox enter cork-dev -- $0 $tree" >&2
+        rm -f "$debug_out/$rel.debug" "$debug_out/.err"
+        exit 1
+    fi
+    rm -f "$debug_out/.err"
+    extracted=$((extracted + 1))
+    if ! llvm-strip --strip-debug "$file" 2>/dev/null; then
+        echo "split-debug: failed to strip $rel" >&2
+        exit 1
+    fi
 done < <(find "$tree" -type f -print0)
 
 if [ "$dry_run" = 1 ]; then
