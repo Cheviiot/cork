@@ -19,6 +19,7 @@
 #include "base/sha256.hpp"
 #include "base/version.hpp"
 #include "cli/commands.hpp"
+#include "cli/spec.hpp"
 #include "i18n/messages.hpp"
 #include "manifest/parse.hpp"
 #include "net/http.hpp"
@@ -797,9 +798,33 @@ int cmd_download(const std::vector<std::string> &args) {
 // пакетов требует принять условия, и принять их за человека нельзя — ни
 // технически, ни по существу. Это единственное, о чём приходится спросить.
 int cmd_setup(const std::vector<std::string> &args) {
-    for (const auto &a : args) {
+    const CommandSpec *self = find_command("setup");
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        const std::string &a = args[i];
         if (a == "-h" || a == "--help") {
             return cmd_help(0);
+        }
+        if (!a.starts_with("-")) {
+            continue;  // значение предыдущего ключа или позиционный аргумент
+        }
+        // Своя таблица, а не таблица download.
+        //
+        // Аргументы уходят в download как есть, и без этой проверки setup
+        // принимал бы всё, что принимает он, — включая ключи, которые
+        // противоречат самому смыслу команды. `--only-download` остановился
+        // бы после скачивания, а install следом не нашёл бы распакованного
+        // дерева; `--list-workloads` напечатал бы список и вышел, но код
+        // возврата сказал бы «установлено». Справка при этом обещает семь
+        // ключей, а принималось бы пятнадцать.
+        if (self != nullptr && !command_accepts(*self, a)) {
+            fmt::print(stderr, "cork setup: unknown option {}\n", a);
+            if (const CommandSpec *dl = find_command("download");
+                dl != nullptr && command_accepts(*dl, a)) {
+                fmt::print(stderr,
+                           "It belongs to `cork download`, which setup runs but does not\n"
+                           "pass everything to: run the steps separately if you need it.\n");
+            }
+            return 2;
         }
     }
 

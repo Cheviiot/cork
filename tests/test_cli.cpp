@@ -121,7 +121,48 @@ void test_target_spellings() {
     CHECK(cork::setup::normalise_target("x86_64h-apple-darwin").empty());
 }
 
+void test_setup_declares_exactly_what_it_accepts() {
+    using namespace cork::cli;
+    const CommandSpec *setup = find_command("setup");
+    const CommandSpec *download = find_command("download");
+    CHECK(setup != nullptr);
+    CHECK(download != nullptr);
+    if (setup == nullptr || download == nullptr) {
+        return;
+    }
+
+    // setup передаёт аргументы в download, поэтому всё, что он объявляет,
+    // обязано быть и там: иначе он пропустит ключ, которого второй не
+    // поймёт, и человек увидит отказ уже посреди работы.
+    for (const auto &o : setup->options) {
+        CHECK(command_accepts(*download, o.name));
+    }
+
+    // И обратное, ради чего проверка и написана: download принимает больше,
+    // и эта разница должна быть ровно та, что задумана. Четыре ключа
+    // останавливают работу на полпути или вместо неё, а setup обещает
+    // готовую установку — их он принимать не должен.
+    const std::string_view refused[] = {"--only-download", "--print-deps-tree",
+                                        "--list-workloads", "--list-components"};
+    for (const auto &name : refused) {
+        CHECK(command_accepts(*download, name));
+        CHECK(!command_accepts(*setup, name));
+    }
+
+    // Всё остальное, что есть у download, у setup тоже есть. Список выше —
+    // исчерпывающий, и если у download появится новый ключ, эта строка
+    // заставит решить, относится он к setup или нет, а не забыть про него.
+    for (const auto &o : download->options) {
+        const bool intentionally_refused =
+            std::find(std::begin(refused), std::end(refused), o.name) != std::end(refused);
+        if (!intentionally_refused) {
+            CHECK(command_accepts(*setup, o.name));
+        }
+    }
+}
+
 int main() {
+    test_setup_declares_exactly_what_it_accepts();
     test_target_spellings();
     test_every_command_is_described();
     test_names_are_unique();

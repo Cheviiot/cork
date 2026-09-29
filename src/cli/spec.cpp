@@ -54,6 +54,11 @@ const std::vector<CommandSpec> &command_table() {
     static const std::vector<CommandSpec> table = {
         // Первой в списке, потому что она и есть обычный путь: остальные —
         // её части, нужные, когда надо повторить один шаг.
+        // Ключи те же, что у download, кроме четырёх: --only-download,
+        // --print-deps-tree, --list-workloads и --list-components
+        // останавливают работу на полпути или вместо неё, а setup обещает
+        // готовую установку. Список здесь не для красоты — по нему команда
+        // и отсеивает чужое, см. cmd_setup.
         {"setup",
          "--accept-license [options]",
          Msg::CmdSetup,
@@ -63,6 +68,10 @@ const std::vector<CommandSpec> &command_table() {
              {"--sdk-version", "<version>", Msg::OptSdkVersion, Completes::SdkVersion},
              {"--architecture", "<arch>", Msg::OptArchitecture, Completes::Architecture, true},
              {"--no-sdk", "", Msg::OptNoSdk},
+             {"--ignore", "<package>", Msg::OptIgnore, Completes::Package, true},
+             {"--major", "<n>", Msg::OptMajor},
+             {"--preview", "", Msg::OptPreview},
+             {"--manifest", "<file>", Msg::OptManifest, Completes::File},
              {"--store", "<dir>", Msg::OptStore, Completes::Directory},
              {"--jobs", "<n>", Msg::OptJobs},
          })},
@@ -159,6 +168,15 @@ const CommandSpec *find_command(std::string_view name) {
     const auto it = std::find_if(table.begin(), table.end(),
                                  [name](const CommandSpec &c) { return c.name == name; });
     return it == table.end() ? nullptr : &*it;
+}
+
+bool command_accepts(const CommandSpec &command, std::string_view option) {
+    // «-h» в таблице не значится: он синоним --help и живёт в разборе.
+    if (option == "-h") {
+        return true;
+    }
+    return std::any_of(command.options.begin(), command.options.end(),
+                       [option](const OptionSpec &o) { return o.name == option; });
 }
 
 std::string render_help() {
