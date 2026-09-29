@@ -199,7 +199,8 @@ void check_prefix_template(Collector &c, const Root &root, const std::string &wi
     if (!stdfs::is_directory(template_dir, ec)) {
         // Шаблона нет — это не отказ: сессия просто создаст префикс с нуля.
         c.warn("prefix template",
-               fmt::format("none at {}; every build will run wineboot from scratch",
+               fmt::format("none at {}; every build will run wineboot from scratch. "
+                           "`cork install` builds it; `cork template` builds it alone",
                            template_dir.string()));
         return;
     }

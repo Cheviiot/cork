@@ -226,23 +226,14 @@ int cmd_run(const std::vector<std::string> &args) {
     return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
 }
 
-int cmd_template(const std::vector<std::string> &args) {
-    setup::Root root = setup::Root::from_environment();
-    stdfs::path source;
-    bool force = false;
-
-    for (std::size_t i = 0; i < args.size(); ++i) {
-        if (args[i] == "--root" && i + 1 < args.size()) {
-            root = root_from(args, i);
-        } else if (args[i] == "--force") {
-            force = true;
-        } else if (args[i] == "-h" || args[i] == "--help") {
-            return cmd_help(0);
-        } else {
-            source = args[i];
-        }
-    }
-
+// Построение шаблона префикса. Отдельной функцией, потому что зовут её двое:
+// команда `cork template` и `cork install`, который доводит установку до
+// готовой, а не до «почти».
+//
+// force=false и уже подходящий шаблон — это не отказ, а «делать нечего»:
+// install зовёт её на каждой установке, и ругаться там не на что.
+int build_template(setup::Root &root, const stdfs::path &explicit_source, bool force,
+                   bool quiet_if_current) {
     auto current = root.resolve_current();
     if (!current.has_value()) {
         fmt::print(stderr, "cork template: {}\n", current.error().to_string());
@@ -255,22 +246,38 @@ int cmd_template(const std::vector<std::string> &args) {
     }
 
     const stdfs::path runtime = root.runtime(cfg->wine_id);
-    const bool explicit_source = !source.empty();
-    if (!explicit_source) {
+    const stdfs::path destination = root.base / "template" / cfg->wine_id;
+    std::error_code ec;
+
+    // Шаблон, отставший от этой сборки Wine, хуже отсутствующего: каждая
+    // склонированная с него сессия заново гоняет wine.inf, и заметно это
+    // только по времени сборки. Поэтому сверяется он тем же способом, что и
+    // обычный префикс.
+    const bool usable = fs::is_dir(destination) && setup::prefix_matches_wine(destination, runtime);
+    if (usable && !force) {
+        if (!quiet_if_current) {
+            i18n::say(i18n::Msg::TemplateAt, destination.string());
+        }
+        return 0;
+    }
+    stdfs::remove_all(destination, ec);
+
+    stdfs::path source = explicit_source;
+    const bool explicit_src = !source.empty();
+    if (!explicit_src) {
         source = root.prefix(cfg->wine_id);
     }
 
     // Префикс, отставший от этой сборки Wine, поднимается заново.
     //
     // Без этого команда молча делала шаблон из того, что лежало, и закрепляла
-    // задержку навсегда: каждая сессия, склонированная с такого шаблона,
-    // гоняла wine.inf заново. Диагностика при этом советовала выполнить
+    // задержку навсегда. Диагностика при этом советовала выполнить
     // `cork template`, а он ничего не менял — совет, который не помогает,
     // хуже молчания.
     //
     // Указанный руками префикс не трогаем: раз его назвали, значит знают, что
     // берут.
-    if (!explicit_source && !setup::prefix_matches_wine(source, runtime)) {
+    if (!explicit_src && !setup::prefix_matches_wine(source, runtime)) {
         if (fs::is_dir(source)) {
             fmt::print(stderr, "cork: the prefix at {} predates this Wine; rebuilding it\n",
                        source.string());
@@ -290,12 +297,6 @@ int cmd_template(const std::vector<std::string> &args) {
         return 1;
     }
 
-    const stdfs::path destination = root.base / "template" / cfg->wine_id;
-    std::error_code ec;
-    if (force) {
-        stdfs::remove_all(destination, ec);
-    }
-
     i18n::say(i18n::Msg::BuildingTemplate, source.string());
     auto stats = setup::build_prefix_template(source, destination, runtime);
     if (!stats.has_value()) {
@@ -311,6 +312,29 @@ int cmd_template(const std::vector<std::string> &args) {
     }
     i18n::say(i18n::Msg::TemplateNote);
     return 0;
+}
+
+int ensure_prefix_template(setup::Root &root) {
+    return build_template(root, {}, /*force=*/false, /*quiet_if_current=*/true);
+}
+
+int cmd_template(const std::vector<std::string> &args) {
+    setup::Root root = setup::Root::from_environment();
+    stdfs::path source;
+    bool force = false;
+
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        if (args[i] == "--root" && i + 1 < args.size()) {
+            root = root_from(args, i);
+        } else if (args[i] == "--force") {
+            force = true;
+        } else if (args[i] == "-h" || args[i] == "--help") {
+            return cmd_help(0);
+        } else {
+            source = args[i];
+        }
+    }
+    return build_template(root, source, force, /*quiet_if_current=*/false);
 }
 
 int cmd_session(const std::vector<std::string> &args) {

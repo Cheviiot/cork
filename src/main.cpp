@@ -70,6 +70,9 @@ int main(int argc, char **argv) {
         return cork::exec::run_tool(command, rest, {});
     }
 
+    if (command == "setup") {
+        return cork::cli::cmd_setup(rest);
+    }
     if (command == "download" || command == "dl") {
         return cork::cli::cmd_download(rest);
     }
