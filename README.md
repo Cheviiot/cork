@@ -1,244 +1,54 @@
 # cork
 
 [![build](https://img.shields.io/github/actions/workflow/status/Cheviiot/cork/ci.yml?branch=main&label=build&style=flat-square)](https://github.com/Cheviiot/cork/actions/workflows/ci.yml)
-[![licence](https://img.shields.io/badge/licence-MIT-blue?style=flat-square)](LICENSE.txt)
-[![status](https://img.shields.io/badge/status-pre--release-orange?style=flat-square)](#where-things-stand)
+[![license](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE.txt)
 
-Microsoft's own C++ compiler, on a Linux machine, under its own name.
+**English** · [Русский](README.ru.md)
 
-```console
-$ cork setup --accept-license
-$ export PATH=~/.cork/toolchains/current/bin/x64:$PATH
+**Build Windows software on Linux with the real MSVC toolchain.**
 
-$ cl /nologo hello.c /Fehello.exe
-hello.c
-$ file hello.exe
-hello.exe: PE32+ executable (console) x86-64, for MS Windows
-```
+cork runs Microsoft's C++ compiler, linker, Windows SDK tools and MSBuild
+through its own Wine. It handles downloads, installation and Wine sessions,
+so you can use familiar commands such as `cl`, `link` and `msbuild`.
 
-That is `cl.exe` from Visual Studio Build Tools, not a compiler pretending to
-be it. Object layout, name mangling, `#pragma` handling, the linker's section
-ordering, the exact diagnostics — all of it is the real thing, because it is
-the real thing. Use it when "close enough to MSVC" is not close enough:
-shipping Windows binaries from Linux CI, reproducing a compiler bug, or
-building code that only ever compiled on Windows.
+Build for **x64, x86 and ARM64** from x86-64 Linux. Run x64 and x86 console
+programs through cork; ARM64 is currently a build-only target.
 
-## Getting cork
+> **Under active development.** No binary release yet. Start with the
+> [source build guide](docs/usage.md#build-from-source), which includes Wine
+> and the required helper. Allow roughly 12 GB for the installed toolchain
+> and download cache, plus space for source builds.
 
-One binary, and it carries everything it needs to bootstrap the rest.
+## Quick start
 
-```console
-$ curl -fsSLO https://github.com/Cheviiot/cork/releases/latest/download/SHA256SUMS
-$ curl -fsSLO https://github.com/Cheviiot/cork/releases/latest/download/cork-0.1.0-linux-x86_64.tar.gz
-$ sha256sum --ignore-missing -c SHA256SUMS
-$ tar -xzf cork-*-linux-x86_64.tar.gz && install -m755 cork-*/cork ~/.local/bin/
-```
-
-**There is no release yet**, so those URLs do not resolve today. The workflow
-that produces them is in place and has not been run; until it is, build from
-source — see `docs/development.md`. Saying it plainly beats an install
-command that quietly 404s.
-
-## What you need
-
-A 64-bit Linux machine and roughly 12 GB of disk: about 3 GB of downloads
-kept for reuse, 7 GB of unpacked toolchain, the rest Wine and its prefix.
-
-Nothing else. You install cork; cork does the rest. It fetches Microsoft's
-packages and its own Wine, unpacks the installers itself, prepares the Wine
-prefix, and asks nothing of your package manager — there is no `wine`,
-`msitools`, `cabextract` or `git` to install first.
-
-One command, and the only question in it is the one that cannot be answered
-for you: Microsoft's licence has to be accepted by the person installing,
-not by the program.
-
-Targets today: `x64`, `x86` and `arm64` Windows, from an x86-64 Linux host.
-
-## Fitting into a build
-
-cork installs the pieces other build systems expect, so the toolchain is
-something you point at, not something you wrap by hand.
-
-```console
-$ eval "$(cork env)"                 # PATH and $CORK_TOOLCHAIN_FILE
-
-# CMake, and ctest runs the Windows binaries it just built
-$ cmake -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE="$CORK_TOOLCHAIN_FILE"
-$ cork run -- cmake --build build
-$ cd build && ctest
-
-# Meson, with the same ability to run what it builds
-$ meson setup build --cross-file ~/.cork/toolchains/current/share/cork-x64-cross.ini
-
-# vcpkg, so dependencies are built with the same compiler as your code
-$ vcpkg install zlib --triplet x64-windows \
-      --overlay-triplets ~/.cork/toolchains/current/share
-```
-
-Targets can be named either way: `x64` or `x86_64-pc-windows-msvc`, `x86` or
-`i686-pc-windows-msvc`, `arm64` or `aarch64-pc-windows-msvc`. Whichever your
-other tools taught you is the one that works.
-
-Editors work too, with one file:
-
-```console
-$ cork env --clangd > .clangd
-```
-
-clangd recognises the `cl` wrapper on its own and switches to MSVC mode, but
-it cannot find a single header without this: MSVC takes their location from
-`INCLUDE`, which the wrapper sets for the compiler it launches and nowhere
-else. The generated config points clangd at the same tree through
-`/winsysroot`, and pins the MSVC version so `_MSC_VER` in the editor agrees
-with what the compiler actually defines.
-
-`ccache` works through the wrappers — the second compilation is served from
-the cache and the object file is identical.
-
-The installed tree is laid out the way Visual Studio lays one out, so it also
-serves as a `/winsysroot` for clang-cl if you would rather not go through
-Wine at all:
-
-```console
-$ clang-cl --target=x86_64-pc-windows-msvc \
-      /winsysroot ~/.cork/toolchains/current -fuse-ld=lld /nologo a.c /Fea.exe
-$ cork run -- ./a.exe
-```
-
-Two compilers, one runtime. cork adds the case-variant symlinks that a
-case-sensitive filesystem needs for this to work at all — the SDK ships
-`Windows.h`, code writes `windows.h`, and `kernelspecs.h` asks for
-`DriverSpecs.h` when the file on disk is `driverspecs.h`.
-
-## What it is careful about
-
-Running a Windows compiler through Wine is the easy half. The half that eats
-weeks is everything around it, and that is where cork spends its effort.
-
-**An install is either whole or absent.** Each installation is a *generation*:
-a tree assembled in a staging directory, checked there, and only then renamed
-into place. The digest of the tree is part of its directory name, so
-publishing is a rename into a name nothing else holds, and the switch of
-`toolchains/current` is a single atomic symlink replacement. Kill cork
-mid-download, mid-unpack or mid-verify and nothing on your `PATH` changes.
-
-**What was installed is written down.** A receipt records the manifest it came
-from, every payload by hash, how many files came out of which package, the
-digest of the tree, and the composition of the bundled Wine — down to how many
-symlinks and Mono assemblies it should contain. `cork doctor` compares the
-installation against that record rather than against a list of directory
-names, so a tree that lost its symlinks during unpacking is reported as
-broken instead of passing because the folders exist.
-
-```console
-$ cork doctor           # receipt, key binaries, Wine composition
-$ cork doctor --deep    # plus every file against the recorded digest
-$ cork doctor --build   # plus compile and link a probe for each target
-```
-
-**Failures do not get lost.** Every step that can fail returns a result the
-caller has to handle. There is no step that tries something, prints a note
-when it does not work, and reports success anyway.
-
-**No temporary files outside its own tree.** Response files, run directories
-and staging all live under `$CORK_HOME` (`~/.cork` unless you say otherwise),
-never in `/tmp`.
-
-## How it is built
-
-cork is a native Linux binary that never links against Wine. The work that
-genuinely requires Windows semantics — spawning the process, translating Unix
-paths into DOS paths through Wine's own translation, holding the whole process
-tree in a Job Object so nothing survives a cancelled build — lives in a small
-PE executable compiled by `wineg++` and embedded into the binary at build
-time. The two halves talk through a binary request file, which sidesteps both
-command-line quoting and Windows' 32 767-character limit.
-
-Wine itself is a submodule, built from source with a two-patch series whose
-only purpose is to make it *refuse* a system wineserver or a system Mono
-instead of quietly pairing our loader with someone else's. A mismatched pair
-does not fail cleanly; it corrupts the prefix and surfaces days later in an
-unrelated build.
-
-The containers Microsoft ships packages in — CFBF, MSI tables, CAB, including
-cabinets stored as streams inside the `.msi` itself — are read by cork
-directly. This keeps `download` testable offline and makes a failure say which
-file went wrong and why, instead of handing you an installer's exit code.
-
-## Shell setup
+After building cork and its runtime, install the tools and compile your
+`hello.c`. `--accept-license` confirms acceptance of Microsoft's terms.
 
 ```sh
-eval "$(cork env)"                  # put the tools on PATH
-eval "$(cork completion bash)"      # tab completion; also zsh and fish
+cork setup --accept-license
+eval "$(cork env --shell bash)"
+cl /nologo hello.c /Fehello.exe
+cork run -- ./hello.exe
 ```
 
-`cork env` points at `toolchains/current`, not at a particular generation, so
-the setting survives the next install.
+## CMake
 
-## Building something
-
-The wrappers are ordinary programs named `cl`, `link`, `lib`, `rc` and so on,
-so anything that shells out to a compiler works unchanged.
+From your project's source directory, with the environment above active:
 
 ```sh
-eval "$(cork env)"
-cl /nologo hello.c
-cork run -- ./hello.exe            # run what you just built
+cmake -S . -B build-win64 -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE="$CORK_TOOLCHAIN_FILE"
+cork run -- cmake --build build-win64
+ctest --test-dir build-win64 --output-on-failure
 ```
 
-`cork run` gives the command its own Wine prefix and takes it away afterwards,
-Ctrl-C included. A program name ending in `.exe` is run through Wine; anything
-else is run natively, so `cork run -- ninja` covers a whole build.
-
-For CMake, a toolchain file ships with every installation and `cork env` points
-at it:
-
-```sh
-cmake -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE="$CORK_TOOLCHAIN_FILE"
-cork run -- cmake --build build
-```
-
-Pass `-DCORK_TARGET=x86` for a 32-bit build.
-
-## Language
-
-Help, progress and prompts follow your locale; `CORK_LANG` overrides it for
-cork alone. English and Russian ship today.
-
-```sh
-CORK_LANG=ru cork help
-```
-
-Error messages stay in English whatever the setting. They end up in bug
-reports and in web searches, and a translated one is findable by nobody.
+The toolchain lets CTest run Windows executables through cork.
 
 ## Documentation
 
-- [docs/generations.md](docs/generations.md) — how an installation is laid out,
-  what the states mean, what `doctor` actually checks
-- [docs/development.md](docs/development.md) — building cork itself
-- [docs/acceptance.md](docs/acceptance.md) — what has to work before a release,
-  and how to run the whole matrix
+- [Usage guide](docs/usage.md) — installation, MSBuild, Meson, vcpkg, editors and diagnostics.
+- [Development](docs/development.md) — build environment and contribution details (Russian).
+- [Internals](docs/generations.md) · [Acceptance tests](docs/acceptance.md) (Russian).
 
-## Where things stand
-
-Pre-release, under active development. Working: manifest resolution, payload
-download with resume, VSIX and MSI unpacking, the wrappers, atomic
-publication, the three levels of checking, compiling and linking for all three
-targets, per-build Wine prefixes cloned from a portable template, several
-compiler toolsets installed side by side, and MSBuild projects.
-
-Ogre3D 14.5.2 builds: OgreMain configures in half a minute and links a 3.3 MB
-x64 DLL. The rest of the acceptance matrix is in
-[docs/acceptance.md](docs/acceptance.md) and runs nightly.
-
-Not there yet: the size reduction passes, the Windows Driver Kit and the
-DirectX SDK.
-
-## Licensing
-
-cork's own source is MIT; see [LICENSE.txt](LICENSE.txt). The Microsoft
-toolchain that `download` fetches stays under Microsoft's terms, which you
-accept with `--accept-license`. cork does not redistribute it and does not
-alter what you agree to.
+cork is [MIT-licensed](LICENSE.txt). Microsoft tools and third-party
+components retain their own licenses.
