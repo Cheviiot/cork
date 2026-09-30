@@ -23,6 +23,13 @@ std::string format_version(std::string_view version, std::string_view revision, 
 
 std::string version_string() { return format_version(kVersion, kGitRevision, kGitDirty); }
 
+std::string format_helper_line(std::string_view sha256) {
+    if (sha256.empty()) {
+        return "PE helper: not embedded";
+    }
+    return fmt::format("PE helper {}", sha256);
+}
+
 std::string wine_runtime_id() {
     const char *v = std::getenv("CORK_WINE_ID");
     return v != nullptr && *v != '\0' ? std::string(v) : std::string(kDefaultWineId);

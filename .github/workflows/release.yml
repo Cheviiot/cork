@@ -108,16 +108,25 @@ jobs:
       - name: Test
         run: ctest --preset linux-release
 
-      # Проверка, а не надежда. Бинарник без вшитого хелпера собирается и
-      # запускается, но не может выполнить ни одного инструмента, и узнаётся
-      # это уже у человека. `cork install` отказывается работать без него —
-      # этим и пользуемся.
-      - name: Refuse a binary without the helper
+      # Проверка, а не надежда, и положительная, а не по отсутствию слова.
+      #
+      # Здесь стояло «запусти cork install и убедись, что в выводе нет слова
+      # helper». Сработать это не могло никогда: отказ случался раньше, на
+      # поиске staging-каталога, которого на свежем --root нет. Одинаково
+      # молчали бинарник с хелпером, бинарник без хелпера и бинарник, который
+      # вообще не запускается, — и все три считались исправными.
+      #
+      # Теперь бинарник сам называет хеш того, что в него вшито, и мы сверяем
+      # его с файлом, который собрали шагом выше. Это утверждение не про
+      # «что-то там есть», а про «там именно этот хелпер».
+      - name: Verify the embedded PE helper
         run: |
-          out="$(./build/linux-release/cork install --root "$RUNNER_TEMP/probe" 2>&1 || true)"
-          echo "$out"
-          if echo "$out" | grep -qi 'helper'; then
-            echo "::error::the built cork has no PE helper embedded"
+          want="$(sha256sum "$RUNNER_TEMP/cork-helper.exe" | cut -d" " -f1)"
+          info="$(./build/linux-release/cork version)"
+          echo "$info"
+          if ! grep -qx "PE helper $want" <<<"$info"; then
+            echo "::error::the built cork does not embed the helper we just built" \
+                 "(expected $want)"
             exit 1
           fi
 

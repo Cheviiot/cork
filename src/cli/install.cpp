@@ -17,11 +17,25 @@
 #include "setup/install.hpp"
 #include "setup/receipt.hpp"
 #include "setup/relocate.hpp"
+#include "base/sha256.hpp"
+
 #include "cork_embedded_helper.h"
 #include "cork_embedded_integration.h"
 #include "cork_embedded_toolchain.h"
 
 namespace cork::cli {
+
+std::string embedded_helper_sha256() {
+    const auto bytes = assets::helper();
+    if (bytes.empty()) {
+        return {};
+    }
+    // Полтораста килобайт на SHA-NI — доли миллисекунды, так что считать при
+    // каждом `cork version` дешевле, чем хранить хеш вторым ассетом и
+    // отвечать за то, чтобы он не разошёлся с первым.
+    return Sha256::hex_of(bytes);
+}
+
 namespace {
 
 namespace stdfs = std::filesystem;
@@ -79,6 +93,22 @@ int cmd_install(const std::vector<std::string> &args) {
         }
     }
 
+    // Раньше всего остального. Проверка стояла ниже, после поиска staging, и
+    // потому не срабатывала никогда: на свежем --root каталога нет, и
+    // выполнение уходило в отказ строкой выше. Проверка в release.yml,
+    // построенная на этом сообщении, молча проходила и для бинарника без
+    // хелпера — то есть ровно тот выпуск, который она обязана была не
+    // выпустить.
+    //
+    // Порядок важен и сам по себе: «ты ещё ничего не скачал» человек исправит
+    // следующей командой, «этот бинарник не может работать никогда» — нет.
+    if (!assets::kHelperEmbedded) {
+        fmt::print(stderr,
+                   "cork install: this binary was built without the PE helper.\n"
+                   "Build it with tools/wine/build-helper.sh and re-configure the project.\n");
+        return 1;
+    }
+
     setup::Root root = setup::Root::from_environment();
     if (!root_dir.empty()) {
         root.base = stdfs::absolute(root_dir);
@@ -97,13 +127,6 @@ int cmd_install(const std::vector<std::string> &args) {
         staging_dir = *found;
     }
     staging_dir = stdfs::absolute(staging_dir);
-
-    if (!assets::kHelperEmbedded) {
-        fmt::print(stderr,
-                   "cork install: this binary was built without the PE helper.\n"
-                   "Build it with tools/wine/build-helper.sh and re-configure the project.\n");
-        return 1;
-    }
 
     auto staging = setup::Staging::adopt(root, staging_dir);
     if (!staging.has_value()) {
