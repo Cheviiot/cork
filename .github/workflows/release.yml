@@ -51,15 +51,16 @@ jobs:
             autoconf automake libtool autoconf-archive bison flex
 
       # PE-часть хелпера собирает clang через wineg++, и стоковый clang 14 на
-      # 22.04 для этого стар. Ставим ту же версию, что и сборка Wine, чтобы
-      # хелпер и рантайм были собраны одним компилятором.
+      # 22.04 для этого стар. Версия та же, что у сборки Wine (wine-release.yml),
+      # чтобы хелпер и рантайм были собраны одним компилятором; менять её надо
+      # в обоих файлах сразу.
       - name: Install clang
         run: |
           curl -fsSL https://apt.llvm.org/llvm.sh -o llvm.sh
           chmod +x llvm.sh
-          sudo ./llvm.sh 19
-          sudo ln -sf /usr/bin/clang-19 /usr/bin/clang
-          sudo ln -sf /usr/bin/clang++-19 /usr/bin/clang++
+          sudo ./llvm.sh 22
+          sudo ln -sf /usr/bin/clang-22 /usr/bin/clang
+          sudo ln -sf /usr/bin/clang++-22 /usr/bin/clang++
           clang --version
 
       # Хелпер собирается против devel-части Wine, и только против неё:

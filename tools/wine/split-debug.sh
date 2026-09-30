@@ -48,9 +48,31 @@ fi
 tree="$(cd "$tree" && pwd)"
 [ -n "$debug_out" ] || debug_out="$tree-debug"
 
-for tool in llvm-objcopy llvm-strip; do
+for tool in llvm-objcopy llvm-strip llvm-objdump; do
     command -v "$tool" >/dev/null || { echo "split-debug: $tool is not installed" >&2; exit 2; }
 done
+
+# Версия проверяется здесь, а не выясняется на первом же файле.
+#
+# llvm-objcopy до 20.1 не умеет --only-keep-debug на PE, который clang собрал
+# не в mingw-режиме: каталог отладки линковщик кладёт в .rdata, эта секция
+# срезается, и patchDebugDirectory отвечает «debug directory not found».
+# Починено в llvm/llvm-project#121653.
+#
+# Сорок минут сборки Wine, чтобы узнать это на d3dx9_33.dll, уже потрачены
+# один раз. Отказ на входе стоит секунду и называет причину.
+llvm_major="$(llvm-objcopy --version | sed -n 's/.*LLVM version \([0-9]*\).*/\1/p' | head -1)"
+if [ -z "$llvm_major" ]; then
+    echo "split-debug: could not read the version of llvm-objcopy" >&2
+    exit 2
+fi
+if [ "$llvm_major" -lt 20 ]; then
+    echo "split-debug: llvm-objcopy $llvm_major cannot extract debug info from these PE files." >&2
+    echo "  --only-keep-debug on a PE built by clang outside mingw mode needs LLVM 20.1" >&2
+    echo "  or newer; older versions fail with \"debug directory not found\"." >&2
+    echo "  See llvm/llvm-project#121653. Install a newer LLVM and put it first in PATH." >&2
+    exit 2
+fi
 
 # Ищем по содержимому, а не по расширению: в дереве Wine исполняемое лежит и
 # как .dll, и как .exe, и как .drv, .sys, .acm, .ocx, .cpl, и вовсе без
